@@ -1,0 +1,24 @@
+# Archivos a ignorar en Git
+# ─────────────────────────────────────
+# Credenciales (NUNCA subir al repositorio)
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Entornos virtuales
+venv/
+env/
+.venv/
+
+# Logs
+*.log
+
+# Sistema
+.DS_Store
+Thumbs.db
