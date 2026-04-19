@@ -357,6 +357,8 @@ def formatear_respuesta_intt(data: dict, nac: str, ced: str) -> str:
         for i, veh in enumerate(vehicles, 1):
             lin.append(f"🚘 *{escape_md(f'Vehículo #{i}:')}*")
             lin.append(f"   📟 {escape_md('Placa:')} `{escape_md(veh.get('placa'), True)}`")
+            lin.append(f"   🔢 {escape_md('Serial:')} `{escape_md(veh.get('serial'), True)}`")
+            lin.append(f"   🚛 {escape_md('Tipo:')} `{escape_md(veh.get('tipo'), True)}`")
             lin.append(f"   🏢 {escape_md('Marca:')} `{escape_md(veh.get('marca'), True)}`")
             lin.append(f"   🚗 {escape_md('Modelo:')} `{escape_md(veh.get('modelo'), True)}`")
             lin.append(f"   🎨 {escape_md('Color:')} `{escape_md(veh.get('color'), True)}`")
