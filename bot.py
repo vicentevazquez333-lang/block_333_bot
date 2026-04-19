@@ -321,7 +321,8 @@ def escape_md(text, is_code=False) -> str:
         return v.replace("\\", "\\\\").replace("`", "\\`")
     else:
         # Fuera de bloques de código, se escapan todos los caracteres reservados.
-        for ch in r"_*[]()~`>#+-=|{}.!\\":
+        # IMPORTANTE: Escapar la contra barra '\' primero.
+        for ch in r"\\_*[]()~`>#+-=|{}.!":
             v = v.replace(ch, f"\\{ch}")
         return v
 
