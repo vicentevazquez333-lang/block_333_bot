@@ -9,8 +9,10 @@ Instalar dependencias:
 """
 
 import os
+import asyncio
 import logging
 import requests
+from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -36,7 +38,10 @@ WEBHOOK_URL    = os.environ.get("WEBHOOK_URL", "")
 PORT           = int(os.environ.get("PORT", 8080))
 # ════════════════════════════════════════════════════════
 
-API_URL = "https://api.cedula.com.ve/api/v1"
+API_URL  = "https://api.cedula.com.ve/api/v1"
+
+# IVSS - Constancia de Cotizaciones
+IVSS_URL = "http://www.ivss.gob.ve:28088/ConstanciaCotizacion/BuscaCotizacionCTRL"
 
 ESPERANDO_CEDULA = 1
 
@@ -67,6 +72,59 @@ def consultar_cedula(cedula: str, nacionalidad: str = "V") -> dict:
         return {"error": True, "error_str": "🔌 Sin conexión al servidor. Intenta más tarde."}
     except Exception as e:
         return {"error": True, "error_str": f"Error inesperado: {str(e)}"}
+
+
+def consultar_ivss(cedula: str, nacionalidad: str = "V") -> dict:
+    """Consulta la Constancia de Cotizaciones del IVSS."""
+    # El dropdown del IVSS espera 'Venezolano' o 'Extranjero'
+    nac_map = {"V": "Venezolano", "E": "Extranjero"}
+    payload = {
+        "nacionalidad": nac_map.get(nacionalidad, "Venezolano"),
+        "cedula":       cedula,
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Referer": "http://www.ivss.gob.ve:28088/ConstanciaCotizacion/",
+    }
+    try:
+        resp = requests.post(IVSS_URL, data=payload, headers=headers, timeout=20)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Verificar si hay mensaje de error / no encontrado
+        error_tag = soup.find(string=lambda t: t and (
+            "no se encontr" in t.lower() or
+            "no existe" in t.lower() or
+            "error" in t.lower()
+        ))
+        if error_tag:
+            return {"error": True, "error_str": "❌ Cédula no encontrada en el IVSS."}
+
+        # Extraer todos los pares etiqueta→valor de la tabla de resultados
+        data = {}
+        # Buscar celdas cabecera (th) y de dato (td) en pares
+        rows = soup.find_all("tr")
+        for row in rows:
+            cells = row.find_all(["td", "th"])
+            # Filas con exactamente 2 celdas: clave - valor
+            if len(cells) == 2:
+                key   = cells[0].get_text(strip=True)
+                value = cells[1].get_text(strip=True)
+                if key:
+                    data[key] = value
+
+        if not data:
+            return {"error": True, "error_str": "⚠️ El IVSS no devolvió datos para esta cédula."}
+
+        return {"error": False, "data": data}
+
+    except requests.exceptions.Timeout:
+        return {"error": True, "error_str": "⏱️ El IVSS tardó demasiado. Intenta de nuevo."}
+    except requests.exceptions.ConnectionError:
+        return {"error": True, "error_str": "🔌 No se pudo conectar al servidor del IVSS."}
+    except Exception as e:
+        return {"error": True, "error_str": f"Error inesperado en IVSS: {str(e)}"}
 
 
 def formatear_respuesta(data: dict) -> str:
@@ -100,6 +158,59 @@ def formatear_respuesta(data: dict) -> str:
         f"    🏫 Centro Electoral:\n"
         f"       `{centro}`\n"
     )
+
+
+def formatear_respuesta_ivss(data: dict, nac: str, ced: str) -> str:
+    """Convierte el diccionario parseado del IVSS en texto Markdown para Telegram."""
+    def esc(v: str) -> str:
+        """Escapa caracteres especiales de MarkdownV2."""
+        for ch in r"_*[]()~`>#+-=|{}.!\\":
+            v = v.replace(ch, f"\\{ch}")
+        return v
+
+    lin = []
+    lin.append("╔══════════════════════════╗")
+    lin.append("║  🏥  DATOS IVSS          ║")
+    lin.append("╚══════════════════════════╝")
+    lin.append("")
+    lin.append(f"🪪  *Cédula:*  `{nac}\\-{ced}`")
+    lin.append("")
+
+    claves_emoji = {
+        "nombre":              "👤",
+        "nombres":             "👤",
+        "apellidos":           "👤",
+        "semanas":             "📊",
+        "cotizadas":           "📊",
+        "semanas cotizadas":   "📊",
+        "afiliacion":          "📅",
+        "afiliación":          "📅",
+        "fecha de afiliacion": "📅",
+        "fecha de afiliación": "📅",
+        "estatus":             "🔖",
+        "status":              "🔖",
+        "empresa":             "🏢",
+        "empleador":           "🏢",
+        "patronal":            "🔢",
+        "numero patronal":     "🔢",
+        "número patronal":     "🔢",
+        "egreso":              "📤",
+        "fecha de egreso":     "📤",
+        "vigencia":            "⏳",
+    }
+
+    for key, val in data.items():
+        if not val:
+            continue
+        key_lower = key.lower()
+        emoji = next(
+            (v for k, v in claves_emoji.items() if k in key_lower),
+            "▪️"
+        )
+        lin.append(f"{emoji}  *{esc(key)}:*")
+        lin.append(f"    `{esc(val)}`")
+
+    return "\n".join(lin)
 
 
 # ─────────────────────────────────────────────
@@ -201,25 +312,56 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
         )
         return
 
-    msg = await update.message.reply_text("🔍 Consultando\\.\\.\\. un momento ⏳", parse_mode="MarkdownV2")
-    result = consultar_cedula(cedula, nacionalidad)
+    msg = await update.message.reply_text(
+        "🔍 Consultando *dos fuentes* en paralelo\\.\\.\\. un momento ⏳",
+        parse_mode="MarkdownV2",
+    )
 
-    if result.get("error"):
-        error = result.get("error_str", "Error desconocido.")
-        await msg.edit_text(f"❌ *Error:*\n`{error}`", parse_mode="MarkdownV2")
+    # Consultar ambas APIs al mismo tiempo en hilos separados (son bloqueantes)
+    loop = asyncio.get_event_loop()
+    result_cedula, result_ivss = await asyncio.gather(
+        loop.run_in_executor(None, consultar_cedula, cedula, nacionalidad),
+        loop.run_in_executor(None, consultar_ivss,   cedula, nacionalidad),
+    )
+
+    # ── Bloque 1: Datos de cédula.com.ve ───────────────────────────────
+    if result_cedula.get("error"):
+        error = result_cedula.get("error_str", "Error desconocido.")
+        await msg.edit_text(
+            f"❌ *Error al consultar cédula:*\n`{error}`",
+            parse_mode="MarkdownV2",
+        )
         return
 
-    data = result.get("data", {})
-    if not data:
-        await msg.edit_text("❌ Cédula no encontrada en la base de datos\\.", parse_mode="MarkdownV2")
+    data_cedula = result_cedula.get("data", {})
+    if not data_cedula:
+        await msg.edit_text(
+            "❌ Cédula no encontrada en la base de datos\\.",
+            parse_mode="MarkdownV2",
+        )
         return
 
     keyboard = [[InlineKeyboardButton("🔄 Nueva consulta", callback_data="NUEVA_CONSULTA")]]
     await msg.edit_text(
-        formatear_respuesta(data),
+        formatear_respuesta(data_cedula),
         parse_mode="MarkdownV2",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
+
+    # ── Bloque 2: Datos del IVSS ────────────────────────────────────────
+    if result_ivss.get("error"):
+        error_ivss = result_ivss.get("error_str", "Error desconocido en IVSS.")
+        await update.message.reply_text(
+            f"⚠️ *IVSS:* {error_ivss}",
+            parse_mode="MarkdownV2",
+        )
+    else:
+        data_ivss = result_ivss.get("data", {})
+        await update.message.reply_text(
+            formatear_respuesta_ivss(data_ivss, nacionalidad, cedula),
+            parse_mode="MarkdownV2",
+        )
+
     logger.info("Consultada: %s-%s", nacionalidad, cedula)
 
 
