@@ -1,0 +1,7 @@
+╔══════════════════════════╗
+║  🚗  DATOS INTT (Vehículos) ║
+╚══════════════════════════╝
+
+🪪  *Cédula:*  `V\-17866303`
+
+❌ *No se encontraron vehículos registrados\.*

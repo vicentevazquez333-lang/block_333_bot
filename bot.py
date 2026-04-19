@@ -165,13 +165,14 @@ def consultar_intt(cedula: str, nacionalidad: str = "V") -> dict:
     """Consulta vehículos en el portal del INTT usando peticiones Livewire."""
     session = requests.Session()
     headers = {
-        "User-Agent": "Mozilla/5.0",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "referer": INTT_LOGIN_URL
     }
 
     try:
-        # 1. Obtener tokens CSRF y snapshot inicial
-        r1 = session.get(INTT_LOGIN_URL, headers=headers, timeout=15)
+        logger.info(f"INTT: Iniciando conexión para {nacionalidad}-{cedula}")
+        # 1. Obtener tokens
+        r1 = session.get(INTT_LOGIN_URL, headers=headers, timeout=20)
         soup1 = BeautifulSoup(r1.text, "html.parser")
         
         meta_token = soup1.find("meta", {"name": "csrf-token"})
@@ -179,11 +180,12 @@ def consultar_intt(cedula: str, nacionalidad: str = "V") -> dict:
         
         div_login = soup1.find("div", attrs={"wire:snapshot": True})
         if not (csrf_token and div_login):
-            return {"error": True, "error_str": "No se pudo iniciar conexión con INTT."}
+            logger.error("INTT: No se encontró CSRF o snapshot de login.")
+            return {"error": True, "error_str": "Servidor INTT ocupado o no disponible."}
             
         snapshot_login = div_login["wire:snapshot"]
         
-        # 2. Login via Livewire Update
+        # 2. Login
         headers.update({
             "x-csrf-token": csrf_token,
             "x-livewire": "true",
@@ -202,20 +204,34 @@ def consultar_intt(cedula: str, nacionalidad: str = "V") -> dict:
             }]
         }
         
-        r2 = session.post(INTT_UPDATE_URL, json=login_payload, headers=headers, timeout=15)
+        logger.info("INTT: Realizando login...")
+        r2 = session.post(INTT_UPDATE_URL, json=login_payload, headers=headers, timeout=20)
         if r2.status_code != 200:
-            return {"error": True, "error_str": "Fallo en la autenticación del INTT."}
+            logger.error(f"INTT: Error login status {r2.status_code}")
+            return {"error": True, "error_str": "Fallo técnico al conectar con el portal."}
 
-        # 3. Ir a la página de vehículos
-        r3 = session.get(INTT_VEH_URL, headers=headers, timeout=15)
+        # Verificar si hubo redirección (indicio de login exitoso)
+        res_json_login = r2.json()
+        effects = res_json_login.get("components", [{}])[0].get("effects", {})
+        if "redirect" not in effects:
+             logger.warning("INTT: Login no devolvió redirección. Posibles credenciales inválidas.")
+
+        # 3. Página de vehículos
+        logger.info("INTT: Accediendo a panel vehicular...")
+        r3 = session.get(INTT_VEH_URL, headers=headers, timeout=20)
+        if "Consulta de vehículos" not in r3.text:
+            logger.error("INTT: No se pudo verificar acceso al panel vehicular.")
+            return {"error": True, "error_str": "Acceso denegado al portal vehicular."}
+
         soup3 = BeautifulSoup(r3.text, "html.parser")
-        div_veh = soup3.find("div", attrs={"wire:id": True, "wire:snapshot": True})
+        div_veh = soup3.find("div", attrs={"wire:snapshot": True}) # Buscamos el componente principal
         if not div_veh:
-            return {"error": True, "error_str": "No se pudo acceder al panel de vehículos."}
+            return {"error": True, "error_str": "No se encontró el buscador de vehículos."}
             
         snap_veh = div_veh["wire:snapshot"]
 
-        # 4. Cambiar a pestaña Cédula
+        # 4. Switch Tab
+        logger.info("INTT: Seleccionando pestaña Cédula...")
         tab_payload = {
             "_token": csrf_token,
             "components": [{
@@ -224,10 +240,14 @@ def consultar_intt(cedula: str, nacionalidad: str = "V") -> dict:
                 "calls": [{"path": "", "method": "switchTab", "params": ["cedula"]}]
             }]
         }
-        r4 = session.post(INTT_UPDATE_URL, json=tab_payload, headers=headers, timeout=15)
-        snap_veh = r4.json()["components"][0]["snapshot"]
+        r4 = session.post(INTT_UPDATE_URL, json=tab_payload, headers=headers, timeout=20)
+        res_json4 = r4.json()
+        snap_veh = res_json4.get("components", [{}])[0].get("snapshot")
+        if not snap_veh:
+             return {"error": True, "error_str": "Fallo al cambiar pestaña de búsqueda."}
 
-        # 5. Buscar cédula
+        # 5. Buscar
+        logger.info(f"INTT: Buscando {cedula}...")
         search_payload = {
             "_token": csrf_token,
             "components": [{
@@ -239,34 +259,37 @@ def consultar_intt(cedula: str, nacionalidad: str = "V") -> dict:
                 "calls": [{"path": "", "method": "buscar", "params": []}]
             }]
         }
-        r5 = session.post(INTT_UPDATE_URL, json=search_payload, headers=headers, timeout=15)
-        html_res = r5.json()["components"][0]["effects"]["html"]
+        r5 = session.post(INTT_UPDATE_URL, json=search_payload, headers=headers, timeout=25)
+        res_json5 = r5.json()
+        comp_res = res_json5.get("components", [{}])[0]
+        html_res = comp_res.get("effects", {}).get("html")
+        
+        if not html_res:
+            logger.warning("INTT: La búsqueda no devolvió HTML de resultados (posible timeout).")
+            return {"error": True, "error_str": "El portal no devolvió resultados a tiempo."}
         
         # 6. Parsear resultados
         res_soup = BeautifulSoup(html_res, "html.parser")
         
-        # Datos del Propietario
-        owner = {}
-        # Nombre: se encuentra en un párrafo fw-semibold
-        name_tag = res_soup.find("h6", string=lambda t: t and "Nombre Completo" in t)
-        if name_tag:
-            owner["nombre"] = name_tag.find_next("p").get_text(strip=True)
-            
-        tel_tag = res_soup.find("h6", string=lambda t: t and "Teléfono" in t)
-        if tel_tag:
-            owner["telefono"] = tel_tag.find_next("p").get_text(strip=True)
-            
-        sangre_tag = res_soup.find("h6", string=lambda t: t and "Tipo de Sangre" in t)
-        if sangre_tag:
-            owner["sangre"] = sangre_tag.find_next("p").get_text(strip=True)
-            
-        dir_tag = res_soup.find("h6", string=lambda t: t and "Dirección" in t)
-        if dir_tag:
-            owner["direccion"] = dir_tag.find_next("p").get_text(strip=True)
+        # ¿Hay resultados? Si contiene "Vehículos registrados a nombre de"
+        if "Vehículos registrados a nombre de" not in html_res and "No se encontraron" in html_res:
+             return {"error": False, "owner": {}, "vehicles": []}
 
-        # Lista de Vehículos
+        owner = {}
+        # Nombre: Buscamos el h6 que dice Nombre Completo
+        for h6 in res_soup.find_all("h6"):
+            txt = h6.get_text()
+            if "Nombre Completo" in txt:
+                owner["nombre"] = h6.find_next("p").get_text(strip=True)
+            elif "Teléfono" in txt:
+                owner["telefono"] = h6.find_next("p").get_text(strip=True)
+            elif "Tipo de Sangre" in txt:
+                owner["sangre"] = h6.find_next("p").get_text(strip=True)
+            elif "Dirección" in txt:
+                owner["direccion"] = h6.find_next("p").get_text(strip=True)
+
         vehicles = []
-        rows = res_soup.find_all("tr")[1:] # Saltamos cabecera
+        rows = res_soup.find_all("tr")[1:]
         for row in rows:
             tds = row.find_all("td")
             if len(tds) >= 8:
@@ -281,20 +304,19 @@ def consultar_intt(cedula: str, nacionalidad: str = "V") -> dict:
                     "estado": tds[7].get_text(strip=True),
                 })
 
-        return {
-            "error": False,
-            "owner": owner,
-            "vehicles": vehicles
-        }
+        logger.info(f"INTT: Consulta exitosa para {cedula} (Vehículos: {len(vehicles)})")
+        return {"error": False, "owner": owner, "vehicles": vehicles}
 
     except Exception as e:
-        logger.error(f"Error INTT: {e}")
-        return {"error": True, "error_str": f"Error INTT: {str(e)}"}
+        logger.error(f"INTT CRITICAL ERROR: {str(e)}", exc_info=True)
+        return {"error": True, "error_str": f"Error técnico en INTT: {str(e)}"}
 
 
 def formatear_respuesta_intt(data: dict, nac: str, ced: str) -> str:
     """Formatea los resultados del INTT."""
     def esc(v: str) -> str:
+        if not v: return "—"
+        v = str(v)
         for ch in r"_*[]()~`>#+-=|{}.!\\":
             v = v.replace(ch, f"\\{ch}")
         return v
@@ -325,12 +347,12 @@ def formatear_respuesta_intt(data: dict, nac: str, ced: str) -> str:
     else:
         for i, veh in enumerate(vehicles, 1):
             lin.append(f"🚘 *Vehículo #{i}:*")
-            lin.append(f"   📟 Placa: `{esc(veh['placa'])}`")
-            lin.append(f"   🏢 Marca: `{esc(veh['marca'])}`")
-            lin.append(f"   🚗 Modelo: `{esc(veh['modelo'])}`")
-            lin.append(f"   🎨 Color: `{esc(veh['color'])}`")
-            lin.append(f"   📅 Año: `{esc(veh['año'])}`")
-            lin.append(f"   🔖 Estado: `{esc(veh['estado'])}`")
+            lin.append(f"   📟 Placa: `{esc(veh.get('placa'))}`")
+            lin.append(f"   🏢 Marca: `{esc(veh.get('marca'))}`")
+            lin.append(f"   🚗 Modelo: `{esc(veh.get('modelo'))}`")
+            lin.append(f"   🎨 Color: `{esc(veh.get('color'))}`")
+            lin.append(f"   📅 Año: `{esc(veh.get('año'))}`")
+            lin.append(f"   🔖 Estado: `{esc(veh.get('estado'))}`")
             lin.append("")
 
     return "\n".join(lin)
@@ -372,7 +394,8 @@ def formatear_respuesta(data: dict) -> str:
 def formatear_respuesta_ivss(data: dict, nac: str, ced: str) -> str:
     """Convierte el diccionario parseado del IVSS en texto Markdown para Telegram."""
     def esc(v: str) -> str:
-        """Escapa caracteres especiales de MarkdownV2."""
+        if not v: return ""
+        v = str(v)
         for ch in r"_*[]()~`>#+-=|{}.!\\":
             v = v.replace(ch, f"\\{ch}")
         return v
@@ -386,11 +409,6 @@ def formatear_respuesta_ivss(data: dict, nac: str, ced: str) -> str:
     lin.append("")
 
     claves_emoji = {
-        "nombre":              "👤",
-        "nombres":             "👤",
-        "apellidos":           "👤",
-        "semanas":             "📊",
-        "cotizadas":           "📊",
         "semanas cotizadas":   "📊",
         "afiliacion":          "📅",
         "afiliación":          "📅",
@@ -561,14 +579,16 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
         )
 
     # ── Bloque 3: INTT (Vehículos) ─────────────────────────────────────
-    if result_intt.get("error"):
-        error_intt = result_intt.get("error_str", "Error en INTT.")
-        await update.message.reply_text(f"⚠️ *INTT:* {error_intt}", parse_mode="MarkdownV2")
-    else:
-        await update.message.reply_text(
-            formatear_respuesta_intt(result_intt, nacionalidad, cedula),
-            parse_mode="MarkdownV2",
-        )
+    try:
+        if result_intt.get("error"):
+            error_intt = result_intt.get("error_str", "Error desconocido.")
+            await update.message.reply_text(f"⚠️ *INTT:* {error_intt}", parse_mode="MarkdownV2")
+        else:
+            txt_intt = formatear_respuesta_intt(result_intt, nacionalidad, cedula)
+            await update.message.reply_text(txt_intt, parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"Error enviando mensaje INTT: {e}")
+        await update.message.reply_text("❌ *INTT:* El mensaje contiene caracteres no compatibles o hubo un fallo al enviarlo\\.", parse_mode="MarkdownV2")
 
     logger.info("Consulta completa: %s-%s", nacionalidad, cedula)
 
