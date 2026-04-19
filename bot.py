@@ -312,47 +312,55 @@ def consultar_intt(cedula: str, nacionalidad: str = "V") -> dict:
         return {"error": True, "error_str": f"Error técnico en INTT: {str(e)}"}
 
 
-def formatear_respuesta_intt(data: dict, nac: str, ced: str) -> str:
-    """Formatea los resultados del INTT."""
-    def esc(v: str) -> str:
-        if not v: return "—"
-        v = str(v)
+def escape_md(text, is_code=False) -> str:
+    """Escapa caracteres para Telegram MarkdownV2 según si están en un code block o no."""
+    if text is None: return ""
+    v = str(text)
+    if is_code:
+        # Dentro de bloques de código (backticks), solo se escapan backticks y contra barras.
+        return v.replace("\\", "\\\\").replace("`", "\\`")
+    else:
+        # Fuera de bloques de código, se escapan todos los caracteres reservados.
         for ch in r"_*[]()~`>#+-=|{}.!\\":
             v = v.replace(ch, f"\\{ch}")
         return v
 
+
+def formatear_respuesta_intt(data: dict, nac: str, ced: str) -> str:
+    """Formatea los resultados del INTT."""
     lin = []
-    lin.append("╔══════════════════════════╗")
-    lin.append("║  🚗  DATOS INTT (Vehículos) ║")
-    lin.append("╚══════════════════════════╝")
+    # Encabezado (escapado)
+    lin.append(escape_md("╔══════════════════════════╗"))
+    lin.append(escape_md("║  🚗  DATOS INTT (Vehículos) ║"))
+    lin.append(escape_md("╚══════════════════════════╝"))
     lin.append("")
-    lin.append(f"🪪  *Cédula:*  `{nac}\\-{ced}`")
+    lin.append(f"🪪  *{escape_md('Cédula:')}*  `{escape_md(nac, True)}-{escape_md(ced, True)}`")
     lin.append("")
 
     owner = data.get("owner", {})
     if owner:
-        lin.append("👤 *PROPIETARIO:*")
-        lin.append(f"   • Nombre: `{esc(owner.get('nombre', '—'))}`")
+        lin.append(f"👤 *{escape_md('PROPIETARIO:')}*")
+        lin.append(f"   • {escape_md('Nombre:')} `{escape_md(owner.get('nombre', '—'), True)}`")
         if owner.get("telefono") and owner["telefono"] != "No disponible":
-            lin.append(f"   • Teléfono: `{esc(owner['telefono'])}`")
+            lin.append(f"   • {escape_md('Teléfono:')} `{escape_md(owner['telefono'], True)}`")
         if owner.get("sangre") and owner["sangre"] != "No disponible":
-            lin.append(f"   • Sangre: `{esc(owner['sangre'])}`")
+            lin.append(f"   • {escape_md('Sangre:')} `{escape_md(owner['sangre'], True)}`")
         if owner.get("direccion") and owner["direccion"] != "No disponible":
-            lin.append(f"   • Dirección: `{esc(owner['direccion'])}`")
+            lin.append(f"   • {escape_md('Dirección:')} `{escape_md(owner['direccion'], True)}`")
         lin.append("")
 
     vehicles = data.get("vehicles", [])
     if not vehicles:
-        lin.append("❌ *No se encontraron vehículos registrados\\.*")
+        lin.append(f"❌ *{escape_md('No se encontraron vehículos registrados.')}*")
     else:
         for i, veh in enumerate(vehicles, 1):
-            lin.append(f"🚘 *Vehículo #{i}:*")
-            lin.append(f"   📟 Placa: `{esc(veh.get('placa'))}`")
-            lin.append(f"   🏢 Marca: `{esc(veh.get('marca'))}`")
-            lin.append(f"   🚗 Modelo: `{esc(veh.get('modelo'))}`")
-            lin.append(f"   🎨 Color: `{esc(veh.get('color'))}`")
-            lin.append(f"   📅 Año: `{esc(veh.get('año'))}`")
-            lin.append(f"   🔖 Estado: `{esc(veh.get('estado'))}`")
+            lin.append(f"🚘 *{escape_md(f'Vehículo #{i}:')}*")
+            lin.append(f"   📟 {escape_md('Placa:')} `{escape_md(veh.get('placa'), True)}`")
+            lin.append(f"   🏢 {escape_md('Marca:')} `{escape_md(veh.get('marca'), True)}`")
+            lin.append(f"   🚗 {escape_md('Modelo:')} `{escape_md(veh.get('modelo'), True)}`")
+            lin.append(f"   🎨 {escape_md('Color:')} `{escape_md(veh.get('color'), True)}`")
+            lin.append(f"   📅 {escape_md('Año:')} `{escape_md(veh.get('año'), True)}`")
+            lin.append(f"   🔖 {escape_md('Estado:')} `{escape_md(veh.get('estado'), True)}`")
             lin.append("")
 
     return "\n".join(lin)
@@ -376,66 +384,47 @@ def formatear_respuesta(data: dict) -> str:
     centro    = cne.get("centro_electoral", "—")
 
     return (
-        "╔══════════════════════════╗\n"
-        "║  📋  DATOS ENCONTRADOS   ║\n"
-        "╚══════════════════════════╝\n\n"
-        f"🪪  *Cédula:*          `{nac}-{ced}`\n"
-        f"🧾  *R\\.I\\.F\\.:*         `{rif}`\n"
-        f"👤  *Nombre:*          `{nombre}`\n\n"
-        "🗳️  *Datos CNE*\n"
-        f"    📍 Estado:          `{estado}`\n"
-        f"    🏘️  Municipio:      `{municipio}`\n"
-        f"    ⛪ Parroquia:       `{parroquia}`\n"
-        f"    🏫 Centro Electoral:\n"
-        f"       `{centro}`\n"
+        escape_md("╔══════════════════════════╗") + "\n" +
+        escape_md("║  📋  DATOS ENCONTRADOS   ║") + "\n" +
+        escape_md("╚══════════════════════════╝") + "\n\n" +
+        f"🪪  *{escape_md('Cédula:')}*          `{escape_md(nac, True)}-{escape_md(ced, True)}`" + "\n" +
+        f"🧾  *{escape_md('R.I.F.:')}*         `{escape_md(rif, True)}`" + "\n" +
+        f"👤  *{escape_md('Nombre:')}*          `{escape_md(nombre, True)}`" + "\n\n" +
+        f"🗳️  *{escape_md('Datos CNE')}*\n" +
+        f"    📍 {escape_md('Estado:')}          `{escape_md(estado, True)}`" + "\n" +
+        f"    🏘️  {escape_md('Municipio:')}      `{escape_md(municipio, True)}`" + "\n" +
+        f"    ⛪ {escape_md('Parroquia:')}       `{escape_md(parroquia, True)}`" + "\n" +
+        f"    🏫 {escape_md('Centro Electoral:')}\n" +
+        f"       `{escape_md(centro, True)}`" + "\n"
     )
 
 
 def formatear_respuesta_ivss(data: dict, nac: str, ced: str) -> str:
-    """Convierte el diccionario parseado del IVSS en texto Markdown para Telegram."""
-    def esc(v: str) -> str:
-        if not v: return ""
-        v = str(v)
-        for ch in r"_*[]()~`>#+-=|{}.!\\":
-            v = v.replace(ch, f"\\{ch}")
-        return v
-
+    """Convierte el diccionario del IVSS en texto MarkdownV2."""
     lin = []
-    lin.append("╔══════════════════════════╗")
-    lin.append("║  🏥  DATOS IVSS          ║")
-    lin.append("╚══════════════════════════╝")
+    lin.append(escape_md("╔══════════════════════════╗"))
+    lin.append(escape_md("║  🏥  DATOS IVSS          ║"))
+    lin.append(escape_md("╚══════════════════════════╝"))
     lin.append("")
-    lin.append(f"🪪  *Cédula:*  `{nac}\\-{ced}`")
+    lin.append(f"🪪  *{escape_md('Cédula:')}*  `{escape_md(nac, True)}-{escape_md(ced, True)}`")
     lin.append("")
 
     claves_emoji = {
         "semanas cotizadas":   "📊",
-        "afiliacion":          "📅",
-        "afiliación":          "📅",
-        "fecha de afiliacion": "📅",
-        "fecha de afiliación": "📅",
-        "estatus":             "🔖",
-        "status":              "🔖",
-        "empresa":             "🏢",
-        "empleador":           "🏢",
+        "afiliacion":          "📅", "afiliación": "📅",
+        "estatus":             "🔖", "status": "🔖",
+        "empresa":             "🏢", "empleador": "🏢",
         "patronal":            "🔢",
-        "numero patronal":     "🔢",
-        "número patronal":     "🔢",
         "egreso":              "📤",
-        "fecha de egreso":     "📤",
         "vigencia":            "⏳",
     }
 
     for key, val in data.items():
-        if not val:
-            continue
+        if not val: continue
         key_lower = key.lower()
-        emoji = next(
-            (v for k, v in claves_emoji.items() if k in key_lower),
-            "▪️"
-        )
-        lin.append(f"{emoji}  *{esc(key)}:*")
-        lin.append(f"    `{esc(val)}`")
+        emoji = next((v for k, v in claves_emoji.items() if k in key_lower), "▪️")
+        lin.append(f"{emoji}  *{escape_md(key)}:*")
+        lin.append(f"    `{escape_md(val, True)}`")
 
     return "\n".join(lin)
 
