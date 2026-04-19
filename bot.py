@@ -76,11 +76,10 @@ def consultar_cedula(cedula: str, nacionalidad: str = "V") -> dict:
 
 def consultar_ivss(cedula: str, nacionalidad: str = "V") -> dict:
     """Consulta la Constancia de Cotizaciones del IVSS."""
-    # El dropdown del IVSS espera 'Venezolano' o 'Extranjero'
-    nac_map = {"V": "Venezolano", "E": "Extranjero"}
     payload = {
-        "nacionalidad": nac_map.get(nacionalidad, "Venezolano"),
+        "nacionalidad": nacionalidad,
         "cedula":       cedula,
+        "consultar":    "Buscar",
     }
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -101,21 +100,45 @@ def consultar_ivss(cedula: str, nacionalidad: str = "V") -> dict:
         if error_tag:
             return {"error": True, "error_str": "❌ Cédula no encontrada en el IVSS."}
 
-        # Extraer todos los pares etiqueta→valor de la tabla de resultados
+        # Extraer parámetros con expresiones regulares de la etiqueta de texto
+        text = soup.get_text(separator=" ", strip=True)
         data = {}
-        # Buscar celdas cabecera (th) y de dato (td) en pares
-        rows = soup.find_all("tr")
-        for row in rows:
-            cells = row.find_all(["td", "th"])
-            # Filas con exactamente 2 celdas: clave - valor
-            if len(cells) == 2:
-                key   = cells[0].get_text(strip=True)
-                value = cells[1].get_text(strip=True)
-                if key:
-                    data[key] = value
+        
+        import re
+        # Nombre (A veces aparece 'Ciudadano (a)')
+        match = re.search(r'Ciudadano\s*\(a\)\s+([A-Z\sÑ]+?)\s+titular', text, re.IGNORECASE)
+        if match: data["Nombre"] = match.group(1).strip()
+        
+        # Cedula
+        match = re.search(r'Identidad N\s*[^\d]*(\d+)', text, re.IGNORECASE)
+        if match: data["Cédula"] = match.group(1)
+        
+        # Semanas
+        match = re.search(r'posee\s+(\d+)\s+semanas', text, re.IGNORECASE)
+        if match: data["Semanas Cotizadas"] = match.group(1)
+        
+        # Afiliacion
+        match = re.search(r'afiliaci[^ ]+\s+al\s+Instituto\s+([\d/]+)', text, re.IGNORECASE)
+        if match: data["Fecha de Afiliación"] = match.group(1)
+        
+        # Estatus
+        match = re.search(r'asegurado\s+([A-Z]+)\s+en\s+la\s+empresa', text, re.IGNORECASE)
+        if match: data["Estatus"] = match.group(1)
+        
+        # Empresa
+        match = re.search(r'en\s+la\s+empresa\s+(.+?)\s+inscrita', text, re.IGNORECASE)
+        if match: data["Empresa"] = match.group(1).strip()
+        
+        # Patronal
+        match = re.search(r'Patronal\s+([A-Z0-9]+)', text, re.IGNORECASE)
+        if match: data["Número Patronal"] = match.group(1)
+        
+        # Egreso
+        match = re.search(r'fecha de egreso\s+([\d/]+)', text, re.IGNORECASE)
+        if match: data["Fecha de Egreso"] = match.group(1)
 
         if not data:
-            return {"error": True, "error_str": "⚠️ El IVSS no devolvió datos para esta cédula."}
+            return {"error": True, "error_str": "⚠️ El IVSS procesó la solicitud pero no se encontraron datos legibles."}
 
         return {"error": False, "data": data}
 
