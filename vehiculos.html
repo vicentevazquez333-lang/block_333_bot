@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+
+<html lang="es" class="light-style layout-compact layout-navbar-fixed layout-menu-fixed     customizer-hide" dir="ltr" data-theme="theme-default" data-assets-path="http://consulta.intt.gob.ve/assets/" data-base-url="http://consulta.intt.gob.ve" data-framework="laravel" data-template="vertical-menu-theme-default-light" data-style="light">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0" />
+
+  <title>Consulta vehiculos |
+    Consultas privadas -
+    INTT
+  </title>
+  <meta name="description" content="Start your development with a Dashboard for Bootstrap 5" />
+  <meta name="keywords" content="dashboard, bootstrap 5 dashboard, bootstrap 5 design, bootstrap 5">
+  <!-- laravel CRUD token -->
+  <meta name="csrf-token" content="vtBhNpwTvPw6BcYEED4fT6hN0xbEa91RIkKgIBQw">
+  <!-- Canonical SEO -->
+  <link rel="canonical" href="https://intt.gob.ve">
+  <!-- Favicon -->
+  <link rel="icon" type="image/x-icon" href="http://consulta.intt.gob.ve/assets/img/favicon/intt.ico" />
+
+
+  <!-- Include Styles -->
+  <!-- $isFront is used to append the front layout styles only on the front layout otherwise the variable will be blank -->
+  <!-- BEGIN: Theme CSS-->
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500;1,600;1,700&display=swap" rel="stylesheet">
+
+<link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/tabler-icons-Cw6d9diP.css" /><link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/fontawesome-xJ33QM-p.css" /><link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/flag-icons-B2r7fxKT.css" /><link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/node-waves-D5r9FyLK.css" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/tabler-icons-Cw6d9diP.css" data-navigate-track="reload" class="" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/fontawesome-xJ33QM-p.css" data-navigate-track="reload" class="" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/flag-icons-B2r7fxKT.css" data-navigate-track="reload" class="" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/node-waves-D5r9FyLK.css" data-navigate-track="reload" class="" /><!-- Core CSS -->
+<link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/core-BfdiCn1E.css" /><link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/theme-default-C5oPm2zn.css" /><link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/demo-BAXq4XAA.css" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/core-BfdiCn1E.css" data-navigate-track="reload" class="template-customizer-core-css" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/theme-default-C5oPm2zn.css" data-navigate-track="reload" class="template-customizer-theme-css" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/demo-BAXq4XAA.css" data-navigate-track="reload" class="" />
+
+<!-- Vendor Styles -->
+<link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/perfect-scrollbar-BzIm-TRA.css" /><link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/typeahead-RTKdwVJ-.css" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/perfect-scrollbar-BzIm-TRA.css" data-navigate-track="reload" class="" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/typeahead-RTKdwVJ-.css" data-navigate-track="reload" class="" />    <link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/sweetalert2-CuosEsF0.css" /><link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/select2-BaJN2qbr.css" /><link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/bootstrap-select-BFg4XpcD.css" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/sweetalert2-CuosEsF0.css" data-navigate-track="reload" class="" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/select2-BaJN2qbr.css" data-navigate-track="reload" class="" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/bootstrap-select-BFg4XpcD.css" data-navigate-track="reload" class="" />
+<!-- Page Styles -->
+    <link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/page-user-view-CZWTnPyy.css" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/page-user-view-CZWTnPyy.css" data-navigate-track="reload" class="" />
+  <!-- Include Scripts for customizer, helper, analytics, config -->
+  <!-- $isFront is used to append the front layout scriptsIncludes only on the front layout otherwise the variable will be blank -->
+  <!-- laravel style -->
+<link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/helpers-_-uALpVs.js" /><script type="module" src="http://consulta.intt.gob.ve/build/assets/helpers-_-uALpVs.js" data-navigate-track="reload"></script><!-- beautify ignore:start -->
+  <!--! Template customizer & Theme config files MUST be included after core stylesheets and helpers.js in the <head> section -->
+  <!--? Template customizer: To hide customizer set displayCustomizer value false in config.js.  -->
+  <link rel="preload" as="style" href="http://consulta.intt.gob.ve/build/assets/template-customizer-D88w3NI3.css" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/template-customizer-CY_hBkLU.js" /><link rel="stylesheet" href="http://consulta.intt.gob.ve/build/assets/template-customizer-D88w3NI3.css" data-navigate-track="reload" /><script type="module" src="http://consulta.intt.gob.ve/build/assets/template-customizer-CY_hBkLU.js" data-navigate-track="reload"></script>
+  <!--? Config:  Mandatory theme config file contain global vars & default theme options, Set your preferred theme option in this file.  -->
+  <link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/config-BaomiNYB.js" /><script type="module" src="http://consulta.intt.gob.ve/build/assets/config-BaomiNYB.js" data-navigate-track="reload"></script>
+
+<!-- Función de logout compartida -->
+<script>
+  function logoutUser() {
+    fetch('http://consulta.intt.gob.ve/logout', {
+      method: 'POST',
+      headers: {
+        'X-CSRF-TOKEN': 'vtBhNpwTvPw6BcYEED4fT6hN0xbEa91RIkKgIBQw',
+        'Content-Type': 'application/json'
+      }
+    }).then(() => {
+      window.location.href = 'http://consulta.intt.gob.ve/ingreso';
+    });
+  }
+</script>
+
+<!-- 1) TIMER DE INACTIVIDAD (EXTENDIBLE) -->
+<script>
+  const INACTIVITY_LIMIT   = parseInt(300); // p.ej. 300s = 5min
+  const WARNING_THRESHOLD  = parseInt(10); // p.ej. 10s
+
+  let inactivityRemaining = INACTIVITY_LIMIT;
+  let inactivityInterval  = null;
+  let swalInstance        = null;
+  let modalShown          = false;
+
+  function startInactivityTimer() {
+    if (inactivityInterval) clearInterval(inactivityInterval);
+
+    inactivityInterval = setInterval(() => {
+      //console.log('inactivityRemaining:', inactivityRemaining); // Para depuración
+      inactivityRemaining--;
+
+      if (swalInstance && document.getElementById('live-countdown')) {
+        document.getElementById('live-countdown').textContent = inactivityRemaining;
+      }
+
+      if (inactivityRemaining <= WARNING_THRESHOLD && !modalShown && !swalInstance) {
+        modalShown = true;
+        showInactivityAlert();
+      }
+
+      if (inactivityRemaining <= 0) {
+        clearInterval(inactivityInterval);
+        logoutUser();
+      }
+    }, 1000);
+  }
+
+  function showInactivityAlert() {
+    swalInstance = true;
+
+    Swal.fire({
+      icon: 'warning',
+      title: '¡Sesión por inactividad!',
+      html: `<div style="text-align:center;">
+              <h3>Su sesión caducará en
+              <strong id="live-countdown">${inactivityRemaining}</strong> segundos…</h3>
+            </div>`,
+      showCancelButton: true,
+      confirmButtonText: 'Extender sesión',
+      cancelButtonText: 'Salir',
+      allowOutsideClick: false,
+      allowEscapeKey: false,
+      backdrop: 'rgba(0,0,0,0.7)',
+      focusConfirm: false,
+      willClose: () => { swalInstance = null; }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        extendSession();
+      } else {
+        logoutUser();
+      }
+    });
+  }
+
+  function extendSession() {
+    fetch('http://consulta.intt.gob.ve/extend-session', {
+      method: 'POST',
+      headers: {
+        'X-CSRF-TOKEN': 'vtBhNpwTvPw6BcYEED4fT6hN0xbEa91RIkKgIBQw',
+        'Content-Type': 'application/json'
+      }
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.success) {
+        // Solo reinicia el contador de INACTIVIDAD
+        inactivityRemaining = INACTIVITY_LIMIT;
+        modalShown = false;
+
+        Swal.fire({
+          icon: 'success',
+          title: 'Sesión extendida',
+          timer: 1500,
+          showConfirmButton: false
+        }).then(() => {
+          startInactivityTimer();
+        });
+      } else {
+        logoutUser();
+      }
+    })
+    .catch(() => logoutUser());
+  }
+
+  // Resetea inactividad con actividad del usuario (salvo cuando el modal está visible)
+  const resetInactivityOnActivity = () => {
+    if (!modalShown && !swalInstance) {
+      inactivityRemaining = INACTIVITY_LIMIT;
+    }
+  };
+  ['mousemove', 'keydown', 'mousedown', 'scroll', 'touchstart'].forEach(ev => {
+    document.addEventListener(ev, resetInactivityOnActivity, { passive: true });
+  });
+</script>
+
+<!-- 2) TIMER DE TOKEN (NO EXTENDIBLE) -->
+<script>
+  // Este valor viene del backend; no se reinicia nunca en el front
+  let tokenRemaining = parseInt(3600);
+  let tokenInterval  = null;
+
+  function startTokenTimer() {
+    if (tokenInterval) clearInterval(tokenInterval);
+
+    tokenInterval = setInterval(() => {
+      tokenRemaining--;
+      if (tokenRemaining <= 0) {
+        clearInterval(tokenInterval);
+        logoutUser();
+      }
+    }, 1000);
+  }
+
+  document.addEventListener('DOMContentLoaded', () => {
+    startInactivityTimer();
+    startTokenTimer();
+  });
+</script>
+
+
+  <script type="module">
+    window.templateCustomizer = new TemplateCustomizer({
+      cssPath: '',
+      themesPath: '',
+      defaultStyle: "light",
+      defaultShowDropdownOnHover: "1", // true/false (for horizontal layout only)
+      displayCustomizer: "1",
+      lang: 'es',
+      pathResolver: function(path) {
+        var resolvedPaths = {
+          // Core stylesheets
+                      'core.scss': 'http://consulta.intt.gob.ve/build/assets/core-BfdiCn1E.css',
+            'core-dark.scss': 'http://consulta.intt.gob.ve/build/assets/core-dark-DBIJQE89.css',
+          
+          // Themes
+                      'theme-default.scss': 'http://consulta.intt.gob.ve/build/assets/theme-default-C5oPm2zn.css',
+            'theme-default-dark.scss': 'http://consulta.intt.gob.ve/build/assets/theme-default-dark-CMxvCmz2.css',
+                      'theme-bordered.scss': 'http://consulta.intt.gob.ve/build/assets/theme-bordered-BNcJ7k2w.css',
+            'theme-bordered-dark.scss': 'http://consulta.intt.gob.ve/build/assets/theme-bordered-dark-Dd1vebqb.css',
+                      'theme-semi-dark.scss': 'http://consulta.intt.gob.ve/build/assets/theme-semi-dark-vBSAmli8.css',
+            'theme-semi-dark-dark.scss': 'http://consulta.intt.gob.ve/build/assets/theme-semi-dark-dark-arhOnWFT.css',
+                  }
+        return resolvedPaths[path] || path;
+      },
+      'controls': ["rtl","style","headerType","contentLayout","layoutCollapsed","layoutNavbarOptions","themes"],
+    });
+  </script>
+<!-- Livewire Styles --><style >[wire\:loading][wire\:loading], [wire\:loading\.delay][wire\:loading\.delay], [wire\:loading\.inline-block][wire\:loading\.inline-block], [wire\:loading\.inline][wire\:loading\.inline], [wire\:loading\.block][wire\:loading\.block], [wire\:loading\.flex][wire\:loading\.flex], [wire\:loading\.table][wire\:loading\.table], [wire\:loading\.grid][wire\:loading\.grid], [wire\:loading\.inline-flex][wire\:loading\.inline-flex] {display: none;}[wire\:loading\.delay\.none][wire\:loading\.delay\.none], [wire\:loading\.delay\.shortest][wire\:loading\.delay\.shortest], [wire\:loading\.delay\.shorter][wire\:loading\.delay\.shorter], [wire\:loading\.delay\.short][wire\:loading\.delay\.short], [wire\:loading\.delay\.default][wire\:loading\.delay\.default], [wire\:loading\.delay\.long][wire\:loading\.delay\.long], [wire\:loading\.delay\.longer][wire\:loading\.delay\.longer], [wire\:loading\.delay\.longest][wire\:loading\.delay\.longest] {display: none;}[wire\:offline][wire\:offline] {display: none;}[wire\:dirty]:not(textarea):not(input):not(select) {display: none;}:root {--livewire-progress-bar-color: #2299dd;}[x-cloak] {display: none !important;}[wire\:cloak] {display: none !important;}</style>
+</head>
+
+<body>
+
+  <!-- Layout Content -->
+  <div class="layout-wrapper layout-content-navbar ">
+  <div class="layout-container">
+
+        <aside id="layout-menu" class="layout-menu menu-vertical menu bg-menu-theme">
+
+  <!-- ! Hide app brand if navbar-full -->
+    <div class="app-brand demo">
+    <a href="http://consulta.intt.gob.ve" class="app-brand-link">
+      <span class="app-brand-logo demo"><img width="32" height="20" src="http://consulta.intt.gob.ve/assets/img/favicon/intt.ico" alt="">
+</span>
+      <span id="truncate-text" class="app-brand-text demo menu-text fw-bold">
+        Consultas privadas
+      </span>
+    </a>
+
+    <a href="javascript:void(0);" class="layout-menu-toggle menu-link text-large ms-auto">
+      <i class="ti menu-toggle-icon d-none d-xl-block align-middle"></i>
+      <i class="ti ti-x d-block d-xl-none ti-md align-middle"></i>
+    </a>
+  </div>
+  
+  <div class="menu-inner-shadow"></div>
+
+  <ul class="menu-inner py-1">
+    
+    
+
+    
+    
+    
+    
+    
+    <li class="menu-item ">
+      
+              <a href="http://consulta.intt.gob.ve"
+          class="menu-link"
+          >
+                    <i class="menu-icon tf-icons ti ti-smart-home"></i>
+                    <div>Inicio</div>
+                  </a>
+
+        
+                  </li>
+        
+    
+
+    
+    
+    
+    
+    
+    <li class="menu-item active open">
+      
+              <a href="javascript:void(0);"
+          class="menu-link menu-toggle"
+          >
+                    <i class="menu-icon tf-icons ti ti-file-search"></i>
+                    <div>Consultas privadas</div>
+                  </a>
+
+        
+                  <ul class="menu-sub">
+                          
+                                        
+                              <li class="menu-item active">
+                  <a href="http://consulta.intt.gob.ve/consulta-vehiculos"
+                     class="menu-link"
+                     >
+                    <div>Vehiculos</div>
+                  </a>
+                </li>
+                                    </ul>
+                  </li>
+        
+    
+
+    
+    
+    
+    
+    
+    <li class="menu-item ">
+      
+          </li>
+        
+    
+
+    
+    
+    
+    
+    
+    <li class="menu-item ">
+      
+          </li>
+          </ul>
+
+  <script>
+    const span = document.getElementById('truncate-text');
+    const text = span.textContent.trim();
+    if (text.length > 11) {
+        span.textContent = text.substring(0, 11) + '…';
+    }
+  </script>
+
+</aside>
+    
+
+    <!-- Layout page -->
+    <div class="layout-page">
+
+      
+      
+
+      <!-- BEGIN: Navbar-->
+            <!-- Navbar -->
+<nav
+  class="layout-navbar container-xxl navbar navbar-expand-xl navbar-detached align-items-center bg-navbar-theme"
+  id="layout-navbar">
+    
+      <!--  Brand demo (display only for navbar-full and hide on below xl) -->
+      
+      <!-- ! Not required for layout-without-menu -->
+            <div
+        class="layout-menu-toggle navbar-nav align-items-xl-center me-3 me-xl-0  d-xl-none ">
+        <a class="nav-item nav-link px-0 me-xl-4" href="javascript:void(0)">
+          <i class="ti ti-menu-2 ti-md"></i>
+        </a>
+      </div>
+      
+      <div class="navbar-nav-right d-flex align-items-center" id="navbar-collapse">
+
+                <!-- Style Switcher -->
+        <div class="navbar-nav align-items-center">
+          <div class="nav-item dropdown-style-switcher dropdown me-2 me-xl-0">
+            <a class="nav-link btn btn-text-secondary btn-icon rounded-pill dropdown-toggle hide-arrow"
+              href="javascript:void(0);" data-bs-toggle="dropdown">
+              <i class='ti ti-md'></i>
+            </a>
+            <ul class="dropdown-menu dropdown-menu-start dropdown-styles">
+              <li>
+                <a class="dropdown-item" href="javascript:void(0);" data-theme="light">
+                  <span class="align-middle"><i class='ti ti-sun ti-md me-3'></i>Modo claro</span>
+                </a>
+              </li>
+              <li>
+                <a class="dropdown-item" href="javascript:void(0);" data-theme="dark">
+                  <span class="align-middle"><i class="ti ti-moon-stars ti-md me-3"></i>Modo oscuro</span>
+                </a>
+              </li>
+              <li>
+                <a class="dropdown-item" href="javascript:void(0);" data-theme="system">
+                  <span class="align-middle"><i class="ti ti-device-desktop-analytics ti-md me-3"></i>Sistema</span>
+                </a>
+              </li>
+            </ul>
+          </div>
+        </div>
+        <!--/ Style Switcher -->
+        
+        <ul class="navbar-nav flex-row align-items-center ms-auto">
+
+          <!-- User -->
+          <li class="nav-item navbar-dropdown dropdown-user dropdown">
+            <a class="nav-link dropdown-toggle hide-arrow p-0 mt-2" href="javascript:void(0);" data-bs-toggle="dropdown">
+              <div class="badge  rounded-circle bg-label-primary px-6 mb-3 d-flex justify-content-center" style="width: 30px; height: 42px;">
+                <h4>E</h4>
+              </div>
+            </a>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li>
+                <a class="dropdown-item mt-0"
+                  href="javascript:void(0);">
+                  <div class="d-flex align-items-center">
+                    <div class="flex-shrink-0 me-2">
+                      <div class=" badge rounded-circle bg-label-primary px-6 mb-3 d-flex justify-content-center" style="width: 30px; height: 42px;">
+                        <h4>E</h4>
+                      </div>
+                    </div>
+                    <div class="flex-grow-1">
+                      <h6 class="mb-0">
+                                                EDUARDO JOSE
+                                              </h6>
+                      <small class="text-muted">CONSULTOR INTT SIN LICENCIA</small>
+                    </div>
+                  </div>
+                </a>
+              </li>
+              <li>
+                <div class="dropdown-divider my-1 mx-n2"></div>
+              </li>
+              
+
+                            <li>
+                <div class="dropdown-divider my-1 mx-n2"></div>
+              </li>
+                            <li>
+                <div class="d-grid px-2 pt-2 pb-1">
+                  <a class="btn btn-sm btn-danger d-flex" href="http://consulta.intt.gob.ve/logout">
+                    <small class="align-middle">Salir</small>
+                    <i class="ti ti-login ms-2 ti-14px"></i>
+                  </a>
+                </div>
+              </li>
+                          </ul>
+          </li>
+          <!--/ User -->
+        </ul>
+      </div>
+
+        </nav>
+  <!-- / Navbar -->
+            <!-- END: Navbar-->
+
+
+      <!-- Content wrapper -->
+      <div class="content-wrapper">
+
+        <!-- Content -->
+                  <div class="container-xxl flex-grow-1 container-p-y">
+            
+                <!-- Encabezado de sección -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="fw-bold text-primary mb-1">Consulta de vehículos</h2>
+            <p class="text-muted">Gestión y visualización de vehículos</p>
+        </div>
+    </div>
+    <div wire:snapshot="{&quot;data&quot;:{&quot;activeTab&quot;:&quot;placa&quot;,&quot;availableTabs&quot;:[[&quot;placa&quot;,&quot;serial&quot;,&quot;cedula&quot;,&quot;placa-historico&quot;,&quot;placa-serial&quot;],{&quot;s&quot;:&quot;arr&quot;}],&quot;userPermissions&quot;:[[&quot;CONSULTA_VEH\u00cdCULO_POR_PLACA&quot;,&quot;CONSULTA_VEH\u00cdCULO_POR_SERIAL&quot;,&quot;CONSULTA_VEH\u00cdCULO_POR_C\u00c9DULA&quot;,&quot;CONSULTA_VEH\u00cdCULO_POR_PLACA_HISTORICO&quot;,&quot;CONSULTA_VEH\u00cdCULO_POR_PLACA_Y_SERIAL&quot;,&quot;CONSULTA_VEHICULOS&quot;],{&quot;s&quot;:&quot;arr&quot;}],&quot;serial&quot;:&quot;&quot;,&quot;placa&quot;:&quot;&quot;,&quot;placa_serial&quot;:&quot;&quot;,&quot;cedula&quot;:&quot;&quot;,&quot;placa_historico&quot;:&quot;&quot;,&quot;nacionalidad&quot;:&quot;V&quot;,&quot;columns&quot;:[[&quot;Placa&quot;,&quot;Serial&quot;,&quot;Tipo&quot;,&quot;Modelo&quot;,&quot;Marca&quot;,&quot;Color&quot;,&quot;Estado&quot;],{&quot;s&quot;:&quot;arr&quot;}],&quot;data_serial&quot;:[[],{&quot;s&quot;:&quot;arr&quot;}],&quot;data_placa&quot;:[[],{&quot;s&quot;:&quot;arr&quot;}],&quot;data_placa_serial&quot;:[[],{&quot;s&quot;:&quot;arr&quot;}],&quot;data_cedula&quot;:[[],{&quot;s&quot;:&quot;arr&quot;}],&quot;data_placa_historico&quot;:[[],{&quot;s&quot;:&quot;arr&quot;}],&quot;show_results&quot;:false,&quot;current_search_type&quot;:null,&quot;error_message&quot;:null},&quot;memo&quot;:{&quot;id&quot;:&quot;r0aEbsM7PQdhb00Obf8B&quot;,&quot;name&quot;:&quot;consultation.vehicle&quot;,&quot;path&quot;:&quot;consulta-vehiculos&quot;,&quot;method&quot;:&quot;GET&quot;,&quot;children&quot;:[],&quot;scripts&quot;:[],&quot;assets&quot;:[],&quot;errors&quot;:[],&quot;locale&quot;:&quot;es&quot;},&quot;checksum&quot;:&quot;0cf9fd392d9e9c6553f9dd9ba5cbfdcda1ba3808ccdbddf43f4a308bfdeb9655&quot;}" wire:effects="[]" wire:id="r0aEbsM7PQdhb00Obf8B">
+  
+  <div>
+    <!-- Panel de selección (se mantiene igual) -->
+    <div class="col-md-12 mb-3">
+      <div class="card text-center">
+        <div class="card-header">
+          <div class="nav-align-top">
+            <ul class="nav nav-pills d-flex justify-content-around col-12" role="tablist">
+              <!--[if BLOCK]><![endif]-->              <li class="nav-item col-12 col-md-2 col-lg-2">
+                <button type="button" class="nav-link active"
+                  wire:click="switchTab('placa')">
+                  <i class="ti ti-relation-one-to-many me-2"></i>Por Placa
+                </button>
+              </li>
+              <!--[if ENDBLOCK]><![endif]-->
+
+              <!--[if BLOCK]><![endif]-->              <li class="nav-item col-12 col-md-2 col-lg-2">
+                <button type="button" class="nav-link "
+                  wire:click="switchTab('serial')">
+                  <i class="fas fa-barcode me-2"></i>Por Serial
+                </button>
+              </li>
+              <!--[if ENDBLOCK]><![endif]-->
+
+              <!--[if BLOCK]><![endif]-->              <li class="nav-item col-12 col-md-2 col-lg-2">
+                <button type="button" class="nav-link "
+                  wire:click="switchTab('placa-serial')">
+                  <i class="ti ti-relation-one-to-many me-2"></i><i class="fas fa-barcode me-2"></i>Por Placa y Serial
+                </button>
+              </li>
+              <!--[if ENDBLOCK]><![endif]-->
+
+              <!--[if BLOCK]><![endif]-->              <li class="nav-item col-12 col-md-2 col-lg-2">
+                <button type="button" class="nav-link "
+                  wire:click="switchTab('cedula')">
+                  <i class="fas fa-id-card me-2"></i>Por cédula de identidad
+                </button>
+              </li>
+              <!--[if ENDBLOCK]><![endif]-->
+
+              <!--[if BLOCK]><![endif]-->              <li class="nav-item col-12 col-md-3 col-lg-3">
+                <button type="button" class="nav-link "
+                  wire:click="switchTab('placa-historico')">
+                  <i class="fas fa-history me-2"></i>Por placa histórico
+                </button>
+              </li>
+              <!--[if ENDBLOCK]><![endif]-->
+            </ul>
+          </div>
+        </div>
+        <div class="card-body">
+          <!-- Búsqueda por Serial -->
+          <!--[if BLOCK]><![endif]--><!--[if ENDBLOCK]><![endif]-->
+
+          <!-- Búsqueda por Placa -->
+          <!--[if BLOCK]><![endif]-->          <div class="search-box">
+            <h5 class="search-title">
+              <i class="ti ti-relation-one-to-many me-2"></i>Búsqueda por Placa Vehicular
+            </h5>
+            <p class="search-subtitle text-muted">
+              Localice vehículos utilizando el número de placa
+            </p>
+            <div class="row mt-3">
+              <div class="col-md-10">
+                <div class="input-group">
+                  <span class="input-group-text bg-transparent">
+                    <i class="ti ti-relation-one-to-many"></i>
+                  </span>
+                  <input type="text" wire:model="placa" class="form-control" placeholder="Ej: ABC1234"
+                    wire:keydown.enter="buscar" autofocus maxlength="7" minlength="7" oninput="mayus(this);">
+                </div>
+              </div>
+              <div class="col-md-2 d-flex align-items-end">
+                <button class="btn btn-primary w-100" wire:loading.attr="disabled" wire:click="buscar">
+                  <span wire:loading.remove>
+                    <i class="fas fa-search me-2"></i>Buscar
+                  </span>
+                  <span wire:loading>
+                    <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
+                    Buscando...
+                  </span>
+                </button>
+              </div>
+              <!--[if BLOCK]><![endif]--><!--[if ENDBLOCK]><![endif]-->
+            </div>
+          </div>
+          <!--[if ENDBLOCK]><![endif]-->
+
+          <!-- Búsqueda por Placa y Serial -->
+          <!--[if BLOCK]><![endif]--><!--[if ENDBLOCK]><![endif]-->
+
+          <!-- Búsqueda por Cédula -->
+          <!--[if BLOCK]><![endif]--><!--[if ENDBLOCK]><![endif]-->
+          <!-- Búsqueda por placa con historico -->
+          <!--[if BLOCK]><![endif]--><!--[if ENDBLOCK]><![endif]-->
+        </div>
+      </div>
+    </div>
+
+    <!-- Panel de resultados -->
+    <!--[if BLOCK]><![endif]--><!--[if ENDBLOCK]><![endif]-->
+  </div>
+  <script>
+    function mayus(e) {
+        e.value = e.value.toUpperCase(); //Colocar texto en mayuscula
+      }
+  </script>
+</div>
+
+          </div>
+          <!-- / Content -->
+
+          <!-- Footer -->
+                    <!-- Footer-->
+<footer class="content-footer footer bg-footer-theme">
+  <div class="container-xxl">
+    <div class="footer-container d-flex align-items-center justify-content-between py-4 flex-md-row flex-column">
+      <div class="text-body">
+        © <script>document.write(new Date().getFullYear())</script>, Elaborado por <a href="https://intt.gob.ve" target="_blank" class="footer-link">Desarrolladores INTT</a>
+      </div>
+    </div>
+  </div>
+</footer>
+<!--/ Footer-->
+                    <!-- / Footer -->
+          <div class="content-backdrop fade"></div>
+        </div>
+        <!--/ Content wrapper -->
+      </div>
+      <!-- / Layout page -->
+    </div>
+
+        <!-- Overlay -->
+    <div class="layout-overlay layout-menu-toggle"></div>
+        <!-- Drag Target Area To SlideIn Menu On Small Screens -->
+    <div class="drag-target"></div>
+  </div>
+  <!-- / Layout wrapper -->
+    <!--/ Layout Content -->
+
+  
+  
+
+  <!-- Include Scripts -->
+  <!-- $isFront is used to append the front layout scripts only on the front layout otherwise the variable will be blank -->
+  <!-- BEGIN: Vendor JS-->
+
+<link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/jquery-CbdDuLi-.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/jquery-CED9k22g.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/_commonjsHelpers-BosuxZz1.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/jquery-Czc5UB_B.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/popper-CjuU2q1_.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/bootstrap-BqFZZLXP.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/node-waves-XDuO7R8f.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/perfect-scrollbar-CLUWhEAQ.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/hammer-DbFOON0O.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/typeahead-BKwBoP4T.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/menu-DAPneovL.js" /><script type="module" src="http://consulta.intt.gob.ve/build/assets/jquery-CbdDuLi-.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/popper-CjuU2q1_.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/bootstrap-BqFZZLXP.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/node-waves-XDuO7R8f.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/perfect-scrollbar-CLUWhEAQ.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/hammer-DbFOON0O.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/typeahead-BKwBoP4T.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/menu-DAPneovL.js" data-navigate-track="reload"></script>
+    <link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/sweetalert2-DgJszxfi.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/_commonjsHelpers-BosuxZz1.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/bootstrap-select-BzvPqqJ-.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/select2-Cf8QheUJ.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/jquery-Czc5UB_B.js" /><script type="module" src="http://consulta.intt.gob.ve/build/assets/sweetalert2-DgJszxfi.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/bootstrap-select-BzvPqqJ-.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/select2-Cf8QheUJ.js" data-navigate-track="reload"></script><!-- END: Page Vendor JS-->
+<!-- BEGIN: Theme JS-->
+<link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/main-BKlEA8ou.js" /><script type="module" src="http://consulta.intt.gob.ve/build/assets/main-BKlEA8ou.js" data-navigate-track="reload"></script>
+<!-- END: Theme JS-->
+<!-- Pricing Modal JS-->
+<!-- END: Pricing Modal JS-->
+<!-- BEGIN: Page JS-->
+    <link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/extended-ui-sweetalert2-BiM4xe9O.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/app-user-view-7qrY-QCN.js" /><link rel="modulepreload" href="http://consulta.intt.gob.ve/build/assets/forms-selects-CNovrPq4.js" /><script type="module" src="http://consulta.intt.gob.ve/build/assets/extended-ui-sweetalert2-BiM4xe9O.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/app-user-view-7qrY-QCN.js" data-navigate-track="reload"></script><script type="module" src="http://consulta.intt.gob.ve/build/assets/forms-selects-CNovrPq4.js" data-navigate-track="reload"></script><!-- END: Page JS-->
+
+<!-- Livewire Scripts -->
+<script src="/livewire/livewire.js?id=df3a17f2"   data-csrf="vtBhNpwTvPw6BcYEED4fT6hN0xbEa91RIkKgIBQw" data-update-uri="/livewire/update" data-navigate-once="true"></script>
+</body>
+</html>

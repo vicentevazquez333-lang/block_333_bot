@@ -9,6 +9,8 @@ Instalar dependencias:
 """
 
 import os
+import re
+import json
 import asyncio
 import logging
 import requests
@@ -42,6 +44,15 @@ API_URL  = "https://api.cedula.com.ve/api/v1"
 
 # IVSS - Constancia de Cotizaciones
 IVSS_URL = "http://www.ivss.gob.ve:28088/ConstanciaCotizacion/BuscaCotizacionCTRL"
+
+# INTT - Consulta de Vehículos (Laravel Livewire)
+INTT_BASE_URL  = "http://consulta.intt.gob.ve"
+INTT_LOGIN_URL = f"{INTT_BASE_URL}/ingreso"
+INTT_UPDATE_URL = f"{INTT_BASE_URL}/livewire/update"
+INTT_VEH_URL   = f"{INTT_BASE_URL}/consulta-vehiculos"
+
+INTT_USER      = os.environ.get("INTT_USER", "Ee30743649@gmail.com")
+INTT_PASS      = os.environ.get("INTT_PASS", "30743649Ee.")
 
 ESPERANDO_CEDULA = 1
 
@@ -150,6 +161,181 @@ def consultar_ivss(cedula: str, nacionalidad: str = "V") -> dict:
         return {"error": True, "error_str": f"Error inesperado en IVSS: {str(e)}"}
 
 
+def consultar_intt(cedula: str, nacionalidad: str = "V") -> dict:
+    """Consulta vehículos en el portal del INTT usando peticiones Livewire."""
+    session = requests.Session()
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "referer": INTT_LOGIN_URL
+    }
+
+    try:
+        # 1. Obtener tokens CSRF y snapshot inicial
+        r1 = session.get(INTT_LOGIN_URL, headers=headers, timeout=15)
+        soup1 = BeautifulSoup(r1.text, "html.parser")
+        
+        meta_token = soup1.find("meta", {"name": "csrf-token"})
+        csrf_token = meta_token["content"] if meta_token else None
+        
+        div_login = soup1.find("div", attrs={"wire:snapshot": True})
+        if not (csrf_token and div_login):
+            return {"error": True, "error_str": "No se pudo iniciar conexión con INTT."}
+            
+        snapshot_login = div_login["wire:snapshot"]
+        
+        # 2. Login via Livewire Update
+        headers.update({
+            "x-csrf-token": csrf_token,
+            "x-livewire": "true",
+            "content-type": "application/json",
+        })
+        
+        login_payload = {
+            "_token": csrf_token,
+            "components": [{
+                "snapshot": snapshot_login,
+                "updates": {
+                    "email": INTT_USER,
+                    "password": INTT_PASS
+                },
+                "calls": [{"path": "", "method": "save", "params": []}]
+            }]
+        }
+        
+        r2 = session.post(INTT_UPDATE_URL, json=login_payload, headers=headers, timeout=15)
+        if r2.status_code != 200:
+            return {"error": True, "error_str": "Fallo en la autenticación del INTT."}
+
+        # 3. Ir a la página de vehículos
+        r3 = session.get(INTT_VEH_URL, headers=headers, timeout=15)
+        soup3 = BeautifulSoup(r3.text, "html.parser")
+        div_veh = soup3.find("div", attrs={"wire:id": True, "wire:snapshot": True})
+        if not div_veh:
+            return {"error": True, "error_str": "No se pudo acceder al panel de vehículos."}
+            
+        snap_veh = div_veh["wire:snapshot"]
+
+        # 4. Cambiar a pestaña Cédula
+        tab_payload = {
+            "_token": csrf_token,
+            "components": [{
+                "snapshot": snap_veh,
+                "updates": {},
+                "calls": [{"path": "", "method": "switchTab", "params": ["cedula"]}]
+            }]
+        }
+        r4 = session.post(INTT_UPDATE_URL, json=tab_payload, headers=headers, timeout=15)
+        snap_veh = r4.json()["components"][0]["snapshot"]
+
+        # 5. Buscar cédula
+        search_payload = {
+            "_token": csrf_token,
+            "components": [{
+                "snapshot": snap_veh,
+                "updates": {
+                    "cedula": cedula,
+                    "nacionalidad": nacionalidad
+                },
+                "calls": [{"path": "", "method": "buscar", "params": []}]
+            }]
+        }
+        r5 = session.post(INTT_UPDATE_URL, json=search_payload, headers=headers, timeout=15)
+        html_res = r5.json()["components"][0]["effects"]["html"]
+        
+        # 6. Parsear resultados
+        res_soup = BeautifulSoup(html_res, "html.parser")
+        
+        # Datos del Propietario
+        owner = {}
+        # Nombre: se encuentra en un párrafo fw-semibold
+        name_tag = res_soup.find("h6", string=lambda t: t and "Nombre Completo" in t)
+        if name_tag:
+            owner["nombre"] = name_tag.find_next("p").get_text(strip=True)
+            
+        tel_tag = res_soup.find("h6", string=lambda t: t and "Teléfono" in t)
+        if tel_tag:
+            owner["telefono"] = tel_tag.find_next("p").get_text(strip=True)
+            
+        sangre_tag = res_soup.find("h6", string=lambda t: t and "Tipo de Sangre" in t)
+        if sangre_tag:
+            owner["sangre"] = sangre_tag.find_next("p").get_text(strip=True)
+            
+        dir_tag = res_soup.find("h6", string=lambda t: t and "Dirección" in t)
+        if dir_tag:
+            owner["direccion"] = dir_tag.find_next("p").get_text(strip=True)
+
+        # Lista de Vehículos
+        vehicles = []
+        rows = res_soup.find_all("tr")[1:] # Saltamos cabecera
+        for row in rows:
+            tds = row.find_all("td")
+            if len(tds) >= 8:
+                vehicles.append({
+                    "placa":  tds[0].get_text(strip=True),
+                    "serial": tds[1].get_text(strip=True),
+                    "tipo":   tds[2].get_text(strip=True),
+                    "marca":  tds[3].get_text(strip=True),
+                    "modelo": tds[4].get_text(strip=True),
+                    "color":  tds[5].get_text(strip=True),
+                    "año":    tds[6].get_text(strip=True),
+                    "estado": tds[7].get_text(strip=True),
+                })
+
+        return {
+            "error": False,
+            "owner": owner,
+            "vehicles": vehicles
+        }
+
+    except Exception as e:
+        logger.error(f"Error INTT: {e}")
+        return {"error": True, "error_str": f"Error INTT: {str(e)}"}
+
+
+def formatear_respuesta_intt(data: dict, nac: str, ced: str) -> str:
+    """Formatea los resultados del INTT."""
+    def esc(v: str) -> str:
+        for ch in r"_*[]()~`>#+-=|{}.!\\":
+            v = v.replace(ch, f"\\{ch}")
+        return v
+
+    lin = []
+    lin.append("╔══════════════════════════╗")
+    lin.append("║  🚗  DATOS INTT (Vehículos) ║")
+    lin.append("╚══════════════════════════╝")
+    lin.append("")
+    lin.append(f"🪪  *Cédula:*  `{nac}\\-{ced}`")
+    lin.append("")
+
+    owner = data.get("owner", {})
+    if owner:
+        lin.append("👤 *PROPIETARIO:*")
+        lin.append(f"   • Nombre: `{esc(owner.get('nombre', '—'))}`")
+        if owner.get("telefono") and owner["telefono"] != "No disponible":
+            lin.append(f"   • Teléfono: `{esc(owner['telefono'])}`")
+        if owner.get("sangre") and owner["sangre"] != "No disponible":
+            lin.append(f"   • Sangre: `{esc(owner['sangre'])}`")
+        if owner.get("direccion") and owner["direccion"] != "No disponible":
+            lin.append(f"   • Dirección: `{esc(owner['direccion'])}`")
+        lin.append("")
+
+    vehicles = data.get("vehicles", [])
+    if not vehicles:
+        lin.append("❌ *No se encontraron vehículos registrados\\.*")
+    else:
+        for i, veh in enumerate(vehicles, 1):
+            lin.append(f"🚘 *Vehículo #{i}:*")
+            lin.append(f"   📟 Placa: `{esc(veh['placa'])}`")
+            lin.append(f"   🏢 Marca: `{esc(veh['marca'])}`")
+            lin.append(f"   🚗 Modelo: `{esc(veh['modelo'])}`")
+            lin.append(f"   🎨 Color: `{esc(veh['color'])}`")
+            lin.append(f"   📅 Año: `{esc(veh['año'])}`")
+            lin.append(f"   🔖 Estado: `{esc(veh['estado'])}`")
+            lin.append("")
+
+    return "\n".join(lin)
+
+
 def formatear_respuesta(data: dict) -> str:
     nac   = data.get("nacionalidad", "V")
     ced   = data.get("cedula", "—")
@@ -172,7 +358,7 @@ def formatear_respuesta(data: dict) -> str:
         "║  📋  DATOS ENCONTRADOS   ║\n"
         "╚══════════════════════════╝\n\n"
         f"🪪  *Cédula:*          `{nac}-{ced}`\n"
-        f"🧾  *R\.I\.F\.:*         `{rif}`\n"
+        f"🧾  *R\\.I\\.F\\.:*         `{rif}`\n"
         f"👤  *Nombre:*          `{nombre}`\n\n"
         "🗳️  *Datos CNE*\n"
         f"    📍 Estado:          `{estado}`\n"
@@ -336,56 +522,55 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
         return
 
     msg = await update.message.reply_text(
-        "🔍 Consultando *dos fuentes* en paralelo\\.\\.\\. un momento ⏳",
+        "🔍 Consultando *múltiples fuentes* en paralelo\\.\\.\\. un momento ⏳",
         parse_mode="MarkdownV2",
     )
 
-    # Consultar ambas APIs al mismo tiempo en hilos separados (son bloqueantes)
+    # Consultar las 3 APIs al mismo tiempo
     loop = asyncio.get_event_loop()
-    result_cedula, result_ivss = await asyncio.gather(
+    result_cedula, result_ivss, result_intt = await asyncio.gather(
         loop.run_in_executor(None, consultar_cedula, cedula, nacionalidad),
         loop.run_in_executor(None, consultar_ivss,   cedula, nacionalidad),
+        loop.run_in_executor(None, consultar_intt,   cedula, nacionalidad),
     )
 
-    # ── Bloque 1: Datos de cédula.com.ve ───────────────────────────────
+    # ── Bloque 1: Cédula / CNE ─────────────────────────────────────────
     if result_cedula.get("error"):
         error = result_cedula.get("error_str", "Error desconocido.")
-        await msg.edit_text(
-            f"❌ *Error al consultar cédula:*\n`{error}`",
-            parse_mode="MarkdownV2",
-        )
-        return
-
-    data_cedula = result_cedula.get("data", {})
-    if not data_cedula:
-        await msg.edit_text(
-            "❌ Cédula no encontrada en la base de datos\\.",
-            parse_mode="MarkdownV2",
-        )
-        return
-
-    keyboard = [[InlineKeyboardButton("🔄 Nueva consulta", callback_data="NUEVA_CONSULTA")]]
-    await msg.edit_text(
-        formatear_respuesta(data_cedula),
-        parse_mode="MarkdownV2",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
-
-    # ── Bloque 2: Datos del IVSS ────────────────────────────────────────
-    if result_ivss.get("error"):
-        error_ivss = result_ivss.get("error_str", "Error desconocido en IVSS.")
-        await update.message.reply_text(
-            f"⚠️ *IVSS:* {error_ivss}",
-            parse_mode="MarkdownV2",
-        )
+        await msg.edit_text(f"❌ *CNE:* `{error}`", parse_mode="MarkdownV2")
     else:
-        data_ivss = result_ivss.get("data", {})
+        data_cedula = result_cedula.get("data", {})
+        if data_cedula:
+            keyboard = [[InlineKeyboardButton("🔄 Nueva consulta", callback_data="NUEVA_CONSULTA")]]
+            await msg.edit_text(
+                formatear_respuesta(data_cedula),
+                parse_mode="MarkdownV2",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+        else:
+            await msg.edit_text("❌ Cédula no encontrada en CNE\\.", parse_mode="MarkdownV2")
+
+    # ── Bloque 2: IVSS ──────────────────────────────────────────────────
+    if result_ivss.get("error"):
+        error_ivss = result_ivss.get("error_str", "Error en IVSS.")
+        await update.message.reply_text(f"⚠️ *IVSS:* {error_ivss}", parse_mode="MarkdownV2")
+    else:
         await update.message.reply_text(
-            formatear_respuesta_ivss(data_ivss, nacionalidad, cedula),
+            formatear_respuesta_ivss(result_ivss.get("data", {}), nacionalidad, cedula),
             parse_mode="MarkdownV2",
         )
 
-    logger.info("Consultada: %s-%s", nacionalidad, cedula)
+    # ── Bloque 3: INTT (Vehículos) ─────────────────────────────────────
+    if result_intt.get("error"):
+        error_intt = result_intt.get("error_str", "Error en INTT.")
+        await update.message.reply_text(f"⚠️ *INTT:* {error_intt}", parse_mode="MarkdownV2")
+    else:
+        await update.message.reply_text(
+            formatear_respuesta_intt(result_intt, nacionalidad, cedula),
+            parse_mode="MarkdownV2",
+        )
+
+    logger.info("Consulta completa: %s-%s", nacionalidad, cedula)
 
 
 async def nueva_consulta_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -1,0 +1,17 @@
+╔══════════════════════════╗
+║  🚗  DATOS INTT (Vehículos) ║
+╚══════════════════════════╝
+
+🪪  *Cédula:*  `V\-10030288`
+
+👤 *PROPIETARIO:*
+   • Nombre: `VICENTE RAMON VAZQUEZ BENITEZ`
+   • Teléfono: `04264744355`
+
+🚘 *Vehículo #1:*
+   📟 Placa: `01AB5JT`
+   🏢 Marca: `CHEVROLET`
+   🚗 Modelo: `CHEVY NOVA`
+   🎨 Color: `MARRON`
+   📅 Año: `1971`
+   🔖 Estado: `TRAMITE ACTIVO`
