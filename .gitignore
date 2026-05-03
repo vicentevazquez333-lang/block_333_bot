@@ -3,6 +3,7 @@
 # Credenciales (NUNCA subir al repositorio)
 .env
 *.env
+VARIABLES_BOT*.txt
 
 # Python
 __pycache__/

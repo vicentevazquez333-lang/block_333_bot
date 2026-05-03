@@ -10,11 +10,20 @@ Instalar dependencias:
 
 import os
 import re
+import io
 import json
 import asyncio
 import logging
 import requests
+from urllib.parse import urljoin
 from bs4 import BeautifulSoup
+
+try:
+    from PIL import Image, ImageFilter, ImageOps
+    import pytesseract
+    OCR_DISPONIBLE = True
+except ImportError:
+    OCR_DISPONIBLE = False
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -53,6 +62,24 @@ INTT_VEH_URL   = f"{INTT_BASE_URL}/consulta-vehiculos"
 
 INTT_USER      = os.environ.get("INTT_USER", "Ee30743649@gmail.com")
 INTT_PASS      = os.environ.get("INTT_PASS", "30743649Ee.")
+
+# SENIAT - Consulta de contribuyentes
+SENIAT_BASE    = "http://contribuyente.seniat.gob.ve"
+SENIAT_LOGIN   = f"{SENIAT_BASE}/iseniatlogin/contribuyente.do"
+SENIAT_CAPTCHA = f"{SENIAT_BASE}/iseniatlogin/kapatcha/kapatch.jpg"
+
+SENIAT_USER    = os.environ.get("SENIAT_USER", "V20878510")
+SENIAT_PASS    = os.environ.get("SENIAT_PASS", "v20878510")
+
+# Endpoints de consulta (fallback si el menú post-login no expone enlaces claros)
+SENIAT_CONSULTA_FALLBACK = [
+    f"{SENIAT_BASE}/iseniat/contribuyente/ConsultaContribuyente.do",
+    f"{SENIAT_BASE}/iseniat/contribuyente/BuscarContribuyente.do",
+    f"{SENIAT_BASE}/iseniat/jsp/contribuyente/consultaContribuyente.jsp",
+    f"{SENIAT_BASE}/contribuyente/ConsultaContribuyente.do",
+    f"{SENIAT_BASE}/contribuyente/BuscarContribuyente.do",
+    f"{SENIAT_BASE}/islr/contribuyente/BuscarContribuyente.do",
+]
 
 ESPERANDO_CEDULA = 1
 
@@ -312,6 +339,439 @@ def consultar_intt(cedula: str, nacionalidad: str = "V") -> dict:
         return {"error": True, "error_str": f"Error técnico en INTT: {str(e)}"}
 
 
+# ─────────────────────────────────────────────
+#  SENIAT - OCR + Consulta
+# ─────────────────────────────────────────────
+def _seniat_parse_login_form(soup, page_url: str):
+    """El POST real va a `login.do` (action del form), no a contribuyente.do."""
+    form = (
+        soup.find("form", id="consultaForm")
+        or soup.find("form", attrs={"name": "DatosLoginForm"})
+        or soup.find("form")
+    )
+    if not form:
+        return None, {}
+    action = (form.get("action") or "").strip() or "/iseniatlogin/login.do"
+    post_url = urljoin(page_url, action)
+    hidden = {}
+    for inp in form.find_all("input", {"type": "hidden"}):
+        name = inp.get("name")
+        if name:
+            hidden[name] = inp.get("value") or ""
+    return post_url, hidden
+
+
+def _seniat_sigue_en_login(html: str) -> bool:
+    """True si el servidor devolvió de nuevo la pantalla de acceso (captcha/usuario)."""
+    if not html:
+        return True
+    if 'id="consultaForm"' in html or "id='consultaForm'" in html:
+        return True
+    if 'name="kaptcha"' in html or "name='kaptcha'" in html:
+        return True
+    return False
+
+
+def _seniat_variantes_documento(nacionalidad: str, cedula: str) -> list[str]:
+    """RIF/cédula en formatos que suelen aceptar los formularios del portal."""
+    nac = (nacionalidad or "V").strip().upper()[:1]
+    ced = re.sub(r"\D", "", str(cedula or ""))
+    if not ced:
+        return []
+    candidatos = [
+        f"{nac}{ced}",
+        f"{nac}{ced.zfill(8)}",
+        f"{nac}{ced.zfill(9)}",
+        ced,
+        ced.zfill(8),
+    ]
+    vistos, ordenados = set(), []
+    for c in candidatos:
+        if c and c not in vistos:
+            vistos.add(c)
+            ordenados.append(c)
+    return ordenados
+
+
+def _seniat_extraer_urls_consulta(html: str, base_url: str) -> list[str]:
+    """Enlaces .do/.jsp del menú post-login (consulta de contribuyente, RIF, etc.)."""
+    skip = (
+        "javascript:", "logout", "cerrar", "salir", "olvido", "recclave",
+        "registronat", "kapatcha/", "login.do", "window.close",
+    )
+    keys = (
+        "consulta", "buscar", "contribuyente", "rif", "datos", "ciudadano",
+        "constancia", "misdat", "persona", "natural", "activida", "domicilio",
+    )
+    encontrados, orden = set(), []
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup.find_all(["a", "area"], href=True):
+        href = tag["href"].strip()
+        low = href.lower()
+        if any(s in low for s in skip):
+            continue
+        if ".do" not in low and ".jsp" not in low:
+            continue
+        if not any(k in low for k in keys):
+            continue
+        full = urljoin(base_url, href)
+        if full not in encontrados:
+            encontrados.add(full)
+            orden.append(full)
+    for tag in soup.find_all(["frame", "iframe"], src=True):
+        href = tag.get("src", "").strip()
+        low = href.lower()
+        if not href or href.lower().startswith("javascript:"):
+            continue
+        if any(s in low for s in skip):
+            continue
+        if ".do" not in low and ".jsp" not in low:
+            continue
+        full = urljoin(base_url, href)
+        if full not in encontrados:
+            encontrados.add(full)
+            orden.append(full)
+    for tag in soup.find_all("form", action=True):
+        act = tag.get("action", "").strip()
+        low = act.lower()
+        if not act or any(s in low for s in skip):
+            continue
+        if ".do" not in low and ".jsp" not in low:
+            continue
+        if not any(k in low for k in keys):
+            continue
+        full = urljoin(base_url, act)
+        if full not in encontrados:
+            encontrados.add(full)
+            orden.append(full)
+    return orden
+
+
+def _seniat_respuesta_tiene_datos(texto_plano: str) -> bool:
+    t = texto_plano.upper()
+    return any(
+        kw in t
+        for kw in ("RIF", "NOMBRE", "RAZÓN", "RAZON", "CONTRIBUYENTE", "DOMICILIO", "ACTIVIDAD")
+    )
+
+
+def _ocr_captcha(img_bytes: bytes) -> str:
+    """Aplica preprocesamiento a la imagen del captcha y extrae el texto con Tesseract."""
+    if not OCR_DISPONIBLE:
+        return ""
+    try:
+        img = Image.open(io.BytesIO(img_bytes)).convert("L")  # Escala de grises
+        # Escalar x3 para mejorar reconocimiento
+        w, h = img.size
+        img = img.resize((w * 3, h * 3), Image.LANCZOS)
+        # Umbral: pixeles < 140 → negro, resto → blanco
+        img = img.point(lambda px: 0 if px < 140 else 255, "1")
+        # Suavizado leve para eliminar ruido
+        img = img.filter(ImageFilter.MedianFilter(size=3))
+        # OCR con solo letras y dígitos, sin espacios
+        texto = pytesseract.image_to_string(
+            img,
+            config="--psm 8 --oem 3 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+        )
+        return texto.strip().replace(" ", "")
+    except Exception as e:
+        logger.warning(f"SENIAT OCR error: {e}")
+        return ""
+
+
+def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
+    """Inicia sesión en el portal del SENIAT, resuelve el CAPTCHA con OCR y consulta los datos."""
+    if not OCR_DISPONIBLE:
+        return {"error": True, "error_str": "⚙️ OCR no disponible. Instala Pillow y pytesseract."}
+
+    session = requests.Session()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": SENIAT_LOGIN,
+        "Accept-Language": "es-VE,es;q=0.9",
+    }
+
+    MAX_INTENTOS_CAPTCHA = 4
+    intento = 0
+    r_post_login = None
+
+    try:
+        # ── Login: GET login siempre fresco + POST a action real (login.do) ──
+        for intento in range(1, MAX_INTENTOS_CAPTCHA + 1):
+            logger.info(f"SENIAT: Cargando login (intento {intento}/{MAX_INTENTOS_CAPTCHA})...")
+            r_login = session.get(SENIAT_LOGIN, headers=headers, timeout=22)
+            r_login.raise_for_status()
+            soup_login = BeautifulSoup(r_login.text, "html.parser")
+            post_url, hidden_fields = _seniat_parse_login_form(soup_login, r_login.url)
+            if not post_url:
+                return {"error": True, "error_str": "❌ Formulario de login del SENIAT no reconocido."}
+
+            logger.info("SENIAT: Descargando captcha...")
+            hdr_cap = {**headers, "Referer": r_login.url}
+            r_cap = session.get(SENIAT_CAPTCHA, headers=hdr_cap, timeout=18)
+            r_cap.raise_for_status()
+            captcha_texto = _ocr_captcha(r_cap.content)
+
+            if not captcha_texto:
+                logger.warning(f"SENIAT: OCR vacío en intento {intento}.")
+                continue
+
+            logger.info(f"SENIAT: OCR captcha → '{captcha_texto}'")
+
+            payload = {
+                **hidden_fields,
+                "usuario": SENIAT_USER,
+                "clave": SENIAT_PASS,
+                "kaptcha": captcha_texto,
+            }
+            r2 = session.post(
+                post_url,
+                data=payload,
+                headers={
+                    **headers,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Referer": r_login.url,
+                },
+                timeout=22,
+                allow_redirects=True,
+            )
+
+            if _seniat_sigue_en_login(r2.text):
+                logger.warning(f"SENIAT: Credenciales o CAPTCHA no aceptados (intento {intento}).")
+                continue
+
+            r_post_login = r2
+            logger.info("SENIAT: Login exitoso.")
+            break
+
+        if r_post_login is None:
+            return {
+                "error": True,
+                "error_str": f"🔒 No se pudo iniciar sesión en el SENIAT tras {MAX_INTENTOS_CAPTCHA} intentos.",
+            }
+
+        ced_digits = re.sub(r"\D", "", str(cedula or ""))
+        nac_u = (nacionalidad or "V").strip().upper()[:1]
+        rif_busqueda = f"{nac_u}{ced_digits}"
+        variantes_doc = _seniat_variantes_documento(nacionalidad, cedula)
+
+        # ── Menú: HTML principal + frames (menús suelen ir en frames) ──
+        html_menu = r_post_login.text
+        menu_base = r_post_login.url
+        s_menu = BeautifulSoup(html_menu, "html.parser")
+        for tag in s_menu.find_all(["frame", "iframe"], src=True):
+            src = (tag.get("src") or "").strip()
+            if not src or src.lower().startswith("javascript:"):
+                continue
+            if ".do" not in src.lower() and ".jsp" not in src.lower():
+                continue
+            fu = urljoin(menu_base, src)
+            try:
+                rf = session.get(fu, headers={**headers, "Referer": menu_base}, timeout=18, allow_redirects=True)
+                if rf.status_code == 200 and len(rf.text) > 400:
+                    html_menu += "\n" + rf.text
+            except Exception:
+                pass
+
+        endpoints_consulta = []
+        vistos = set()
+        for u in _seniat_extraer_urls_consulta(html_menu, menu_base):
+            if u not in vistos:
+                vistos.add(u)
+                endpoints_consulta.append(u)
+        for u in SENIAT_CONSULTA_FALLBACK:
+            if u not in vistos:
+                vistos.add(u)
+                endpoints_consulta.append(u)
+
+        nombres_rif = ("rif", "numRif", "numeroRif", "nroRif", "p_rif", "rifContribuyente")
+        nombres_ced = ("cedula", "p_cedula", "documento", "numDocumento", "identificacion")
+
+        def _intentar_url(url_consulta: str):
+            hdr = {**headers, "Referer": menu_base}
+            for doc in variantes_doc[:6]:
+                for pname in nombres_rif:
+                    try:
+                        r3 = session.get(
+                            url_consulta,
+                            params={pname: doc},
+                            headers=hdr,
+                            timeout=22,
+                            allow_redirects=True,
+                        )
+                        if (
+                            r3.status_code == 200
+                            and len(r3.text) > 900
+                            and "index.htm" not in (r3.url or "").lower()
+                            and not _seniat_sigue_en_login(r3.text)
+                        ):
+                            soup3 = BeautifulSoup(r3.text, "html.parser")
+                            page3_text = soup3.get_text(separator=" ", strip=True)
+                            if _seniat_respuesta_tiene_datos(page3_text):
+                                data = _parsear_datos_seniat(soup3, page3_text, rif_busqueda)
+                                if data:
+                                    return data
+                    except Exception:
+                        pass
+                base_data = {
+                    "nacionalidad": (nacionalidad or "V").strip().upper()[:1],
+                    "nac": (nacionalidad or "V").strip().upper()[:1],
+                    "numero": ced_digits,
+                }
+                for pname in nombres_ced:
+                    try:
+                        pdata = {**base_data, pname: doc}
+                        r3 = session.get(
+                            url_consulta,
+                            params=pdata,
+                            headers=hdr,
+                            timeout=22,
+                            allow_redirects=True,
+                        )
+                        if (
+                            r3.status_code == 200
+                            and len(r3.text) > 900
+                            and "index.htm" not in (r3.url or "").lower()
+                            and not _seniat_sigue_en_login(r3.text)
+                        ):
+                            soup3 = BeautifulSoup(r3.text, "html.parser")
+                            page3_text = soup3.get_text(separator=" ", strip=True)
+                            if _seniat_respuesta_tiene_datos(page3_text):
+                                data = _parsear_datos_seniat(soup3, page3_text, rif_busqueda)
+                                if data:
+                                    return data
+                        pdata_post = {**base_data, pname: doc}
+                        r4 = session.post(
+                            url_consulta,
+                            data=pdata_post,
+                            headers={
+                                **hdr,
+                                "Content-Type": "application/x-www-form-urlencoded",
+                            },
+                            timeout=22,
+                            allow_redirects=True,
+                        )
+                        if (
+                            r4.status_code == 200
+                            and len(r4.text) > 900
+                            and "index.htm" not in (r4.url or "").lower()
+                            and not _seniat_sigue_en_login(r4.text)
+                        ):
+                            soup4 = BeautifulSoup(r4.text, "html.parser")
+                            page4_text = soup4.get_text(separator=" ", strip=True)
+                            if _seniat_respuesta_tiene_datos(page4_text):
+                                data = _parsear_datos_seniat(soup4, page4_text, rif_busqueda)
+                                if data:
+                                    return data
+                    except Exception:
+                        pass
+            return None
+
+        data_contribuyente = None
+        for url_consulta in endpoints_consulta[:12]:
+            logger.info(f"SENIAT: Probando → {url_consulta}")
+            data_contribuyente = _intentar_url(url_consulta)
+            if data_contribuyente:
+                break
+
+        if not data_contribuyente:
+            soup2 = BeautifulSoup(r_post_login.text, "html.parser")
+            page2_text = soup2.get_text(separator=" ", strip=True)
+            if _seniat_respuesta_tiene_datos(page2_text):
+                data_contribuyente = _parsear_datos_seniat(soup2, page2_text, rif_busqueda)
+
+        if not data_contribuyente:
+            return {
+                "error": True,
+                "error_str": "❌ Sesión SENIAT abierta, pero no se encontró la consulta de datos para esta cédula.",
+            }
+
+        logger.info(f"SENIAT: Consulta exitosa para {rif_busqueda}")
+        return {"error": False, "data": data_contribuyente, "captcha_intentos": intento}
+
+    except requests.exceptions.Timeout:
+        return {"error": True, "error_str": "⏱️ El SENIAT tardó demasiado en responder."}
+    except requests.exceptions.ConnectionError:
+        return {"error": True, "error_str": "🔌 No se pudo conectar al portal del SENIAT."}
+    except Exception as e:
+        logger.error(f"SENIAT CRITICAL ERROR: {e}", exc_info=True)
+        return {"error": True, "error_str": f"Error técnico en SENIAT: {str(e)}"}
+
+
+def _parsear_datos_seniat(soup, texto: str, rif_busqueda: str) -> dict:
+    """Extrae los datos del contribuyente del HTML del SENIAT."""
+    data = {}
+
+    # Intentar extraer de tablas
+    tablas = soup.find_all("table")
+    for tabla in tablas:
+        filas = tabla.find_all("tr")
+        for fila in filas:
+            celdas = fila.find_all(["td", "th"])
+            if len(celdas) >= 2:
+                clave = re.sub(r"\s+", " ", celdas[0].get_text(strip=True)).strip(" :")
+                valor = re.sub(r"\s+", " ", celdas[1].get_text(strip=True))
+                if clave and valor and len(valor) > 1:
+                    data[clave] = valor
+
+    # Buscar con regex si la tabla falló
+    patrones = [
+        ("RIF",              r"(?:R\.?\s*I\.?\s*F\.?|RIF)\s*:?\s*([VEJPG][\s\-]?\d{6,12}(?:[\s\-]\d)?)"),
+        ("Nombre / Razón",   r"(?:nombre|raz[oó]n social)\s*:?\s*([A-ZÁÉÍÓÚÑ][A-ZÁÉÍÓÚÑ\s,\.]{4,60})"),
+        ("Domicilio Fiscal", r"(?:domicilio|direcci[oó]n)\s*:?\s*(.{10,120}?)(?:\n|,{2}|\s{3})"),
+        ("Actividad",        r"actividad\s*:?\s*(.{5,80}?)(?:\n|\s{3})"),
+        ("Estatus",          r"(?:estatus|estado)\s*:?\s*(ACTIVO|INACTIVO|SUSPENDIDO)"),
+    ]
+    for nombre_campo, patron in patrones:
+        if nombre_campo not in data:
+            m = re.search(patron, texto, re.IGNORECASE)
+            if m:
+                data[nombre_campo] = m.group(1).strip()
+
+    if len(data) >= 2:
+        return data
+    if len(data) == 1:
+        k, v = next(iter(data.items()))
+        if k.upper().startswith("RIF") and rif_busqueda and rif_busqueda.upper().replace("-", "") in str(v).upper().replace("-", ""):
+            return data
+    return {}
+
+
+def formatear_respuesta_seniat(data: dict, nac: str, ced: str, intentos: int = 1) -> str:
+    """Formatea los datos del SENIAT para Telegram MarkdownV2."""
+    lin = []
+    lin.append(escape_md("╔══════════════════════════╗"))
+    lin.append(escape_md("║  🏛️  DATOS SENIAT        ║"))
+    lin.append(escape_md("╚══════════════════════════╝"))
+    lin.append("")
+    lin.append(f"🪪  *{escape_md('Cédula:')}*  `{escape_md(nac, True)}-{escape_md(ced, True)}`")
+    if intentos > 1:
+        lin.append(f"🔐  _{escape_md(f'CAPTCHA resuelto en {intentos} intento(s)')}_")
+    lin.append("")
+
+    claves_emoji = {
+        "rif":        "🧾",
+        "nombre":     "👤", "razón":     "👤", "razon":    "👤",
+        "domicilio":  "📍", "dirección": "📍", "direccion": "📍",
+        "actividad":  "💼",
+        "estatus":    "🔖", "estado":    "🔖", "status":    "🔖",
+        "teléfono":   "📞", "telefono":  "📞",
+        "correo":     "📧", "email":     "📧",
+        "municipio":  "🏘️",
+        "parroquia":  "⛪",
+    }
+
+    for key, val in data.items():
+        if not val:
+            continue
+        key_lower = key.lower()
+        emoji = next((v for k, v in claves_emoji.items() if k in key_lower), "▪️")
+        lin.append(f"{emoji}  *{escape_md(key)}:*")
+        lin.append(f"    `{escape_md(str(val), True)}`")
+
+    return "\n".join(lin)
+
+
 def escape_md(text, is_code=False) -> str:
     """Escapa caracteres para Telegram MarkdownV2 según si están en un code block o no."""
     if text is None: return ""
@@ -442,7 +902,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Soy el bot de consulta de *Cédulas Venezolanas* 🇻🇪\n\n"
         "📌 *¿Qué puedo hacer?*\n"
         "  • Consultar datos por número de cédula\n"
-        "  • Mostrar nombre, RIF y estado donde vota\n\n"
+        "  • Mostrar nombre, RIF y estado donde vota\n"
+        "  • Datos del IVSS \\(semanas cotizadas\\)\n"
+        "  • Vehículos registrados \\(INTT\\)\n"
+        "  • Datos fiscales del SENIAT 🆕\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "📲 *Comandos disponibles:*\n"
         "  /consultar — Iniciar una consulta\n"
@@ -536,12 +999,13 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
         parse_mode="MarkdownV2",
     )
 
-    # Consultar las 3 APIs al mismo tiempo
+    # Consultar las 4 fuentes al mismo tiempo
     loop = asyncio.get_event_loop()
-    result_cedula, result_ivss, result_intt = await asyncio.gather(
-        loop.run_in_executor(None, consultar_cedula, cedula, nacionalidad),
-        loop.run_in_executor(None, consultar_ivss,   cedula, nacionalidad),
-        loop.run_in_executor(None, consultar_intt,   cedula, nacionalidad),
+    result_cedula, result_ivss, result_intt, result_seniat = await asyncio.gather(
+        loop.run_in_executor(None, consultar_cedula,  cedula, nacionalidad),
+        loop.run_in_executor(None, consultar_ivss,    cedula, nacionalidad),
+        loop.run_in_executor(None, consultar_intt,    cedula, nacionalidad),
+        loop.run_in_executor(None, consultar_seniat,  cedula, nacionalidad),
     )
 
     # ── Bloque 1: Cédula / CNE ─────────────────────────────────────────
@@ -581,6 +1045,27 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
     except Exception as e:
         logger.error(f"Error enviando mensaje INTT: {e}")
         await update.message.reply_text("❌ *INTT:* El mensaje contiene caracteres no compatibles o hubo un fallo al enviarlo\\.", parse_mode="MarkdownV2")
+
+    # ── Bloque 4: SENIAT ────────────────────────────────────────────
+    try:
+        if result_seniat.get("error"):
+            error_seniat = result_seniat.get("error_str", "Error desconocido.")
+            await update.message.reply_text(
+                f"⚠️ *SENIAT:* {escape_md(error_seniat)}",
+                parse_mode="MarkdownV2"
+            )
+        else:
+            intentos = result_seniat.get("captcha_intentos", 1)
+            txt_seniat = formatear_respuesta_seniat(
+                result_seniat.get("data", {}), nacionalidad, cedula, intentos
+            )
+            await update.message.reply_text(txt_seniat, parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"Error enviando mensaje SENIAT: {e}")
+        await update.message.reply_text(
+            "❌ *SENIAT:* Error al formatear la respuesta\\.",
+            parse_mode="MarkdownV2"
+        )
 
     logger.info("Consulta completa: %s-%s", nacionalidad, cedula)
 
