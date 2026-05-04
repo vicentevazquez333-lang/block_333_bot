@@ -82,6 +82,12 @@ SENIAT_PAGINA_PRINCIPAL  = f"{SENIAT_BASE}/iseniatlogin/paginaprincipal.do"
 
 SENIAT_USER    = os.environ.get("SENIAT_USER", "V20878510")
 SENIAT_PASS    = os.environ.get("SENIAT_PASS", "v20878510")
+# El portal contribuyente.seniat.gob.ve suele responder lento; sube estos valores si ves timeouts.
+SENIAT_TIMEOUT_CAPTCHA = int(os.environ.get("SENIAT_TIMEOUT_CAPTCHA", "35"))
+SENIAT_TIMEOUT_PAGE = int(os.environ.get("SENIAT_TIMEOUT_PAGE", "60"))
+SENIAT_TIMEOUT_POST = int(os.environ.get("SENIAT_TIMEOUT_POST", "65"))
+SENIAT_TIMEOUT_PDF = int(os.environ.get("SENIAT_TIMEOUT_PDF", "120"))
+SENIAT_SKIP_PLANILLA = os.environ.get("SENIAT_SKIP_PLANILLA", "").strip().lower() in ("1", "true", "yes", "on")
 
 # Endpoints de consulta (fallback si el menú post-login no expone enlaces claros)
 SENIAT_CONSULTA_FALLBACK = [
@@ -577,7 +583,7 @@ def _seniat_descargar_texto_planilla(
         return None
     hdr = {**headers, "Referer": referer, "Accept": "text/html,application/pdf;q=0.9,*/*;q=0.8"}
     try:
-        r = session.get(url, headers=hdr, timeout=45, allow_redirects=True)
+        r = session.get(url, headers=hdr, timeout=SENIAT_TIMEOUT_PDF, allow_redirects=True)
     except Exception as e:
         logger.warning(f"SENIAT planilla GET: {e}")
         return None
@@ -691,7 +697,7 @@ def _seniat_rifconsulta_buscar_contribuyente(
         r0 = session.get(
             SENIAT_RIFCONSULTA_LOGIN,
             headers=hdr,
-            timeout=22,
+            timeout=SENIAT_TIMEOUT_PAGE,
             allow_redirects=True,
         )
         if _seniat_rifconsulta_pagina_error(r0.text):
@@ -699,13 +705,13 @@ def _seniat_rifconsulta_buscar_contribuyente(
             session.get(
                 SENIAT_PAGINA_PRINCIPAL,
                 headers={**headers, "Referer": menu_base},
-                timeout=18,
+                timeout=SENIAT_TIMEOUT_PAGE,
                 allow_redirects=True,
             )
             r0 = session.get(
                 SENIAT_RIFCONSULTA_LOGIN,
                 headers={**headers, "Referer": SENIAT_PAGINA_PRINCIPAL},
-                timeout=22,
+                timeout=SENIAT_TIMEOUT_PAGE,
                 allow_redirects=True,
             )
         if _seniat_rifconsulta_pagina_error(r0.text):
@@ -744,7 +750,7 @@ def _seniat_rifconsulta_buscar_contribuyente(
                 "Content-Type": "application/x-www-form-urlencoded",
                 "Referer": r0.url,
             },
-            timeout=25,
+            timeout=SENIAT_TIMEOUT_POST,
             allow_redirects=True,
         )
         if r1.status_code != 200 or len(r1.text) < 400:
@@ -769,7 +775,7 @@ def _seniat_rifconsulta_buscar_contribuyente(
             r2 = session.get(
                 rif_href,
                 headers={**headers, "Referer": r1.url},
-                timeout=28,
+                timeout=SENIAT_TIMEOUT_PAGE,
                 allow_redirects=True,
             )
             if r2.status_code == 200 and len(r2.text) > 300 and not _seniat_sigue_en_login(r2.text):
@@ -780,17 +786,22 @@ def _seniat_rifconsulta_buscar_contribuyente(
                     if v and (k not in data or len(str(v)) > len(str(data.get(k, "")))):
                         data[k] = v
                 plan_url = _seniat_enlace_ver_planilla(soup2, r2.url)
-                if plan_url:
+                if plan_url and not SENIAT_SKIP_PLANILLA:
                     logger.info("SENIAT: descargando planilla PDF (Ver Planilla)...")
                     planilla_txt = _seniat_descargar_texto_planilla(
                         session, plan_url, headers, r2.url
                     )
+                elif plan_url and SENIAT_SKIP_PLANILLA:
+                    logger.info("SENIAT: SENIAT_SKIP_PLANILLA=1 — omitiendo descarga del PDF.")
 
         if not data and not planilla_txt:
             return None
         if not data:
             data = {"Nota": "Solo se obtuvo texto de planilla PDF"}
         return {"data": data, "planilla": planilla_txt}
+    except requests.exceptions.Timeout:
+        logger.warning("SENIAT rifconsulta: timeout en una petición (el portal respondió tarde).")
+        return None
     except Exception as e:
         logger.warning(f"SENIAT rifconsulta: {e}")
         return None
@@ -840,7 +851,7 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
         # ── Login: GET login siempre fresco + POST a action real (login.do) ──
         for intento in range(1, MAX_INTENTOS_CAPTCHA + 1):
             logger.info(f"SENIAT: Cargando login (intento {intento}/{MAX_INTENTOS_CAPTCHA})...")
-            r_login = session.get(SENIAT_LOGIN, headers=headers, timeout=22)
+            r_login = session.get(SENIAT_LOGIN, headers=headers, timeout=SENIAT_TIMEOUT_PAGE)
             r_login.raise_for_status()
             soup_login = BeautifulSoup(r_login.text, "html.parser")
             post_url, hidden_fields = _seniat_parse_login_form(soup_login, r_login.url)
@@ -849,7 +860,7 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
 
             logger.info("SENIAT: Descargando captcha...")
             hdr_cap = {**headers, "Referer": r_login.url}
-            r_cap = session.get(SENIAT_CAPTCHA, headers=hdr_cap, timeout=18)
+            r_cap = session.get(SENIAT_CAPTCHA, headers=hdr_cap, timeout=SENIAT_TIMEOUT_CAPTCHA)
             r_cap.raise_for_status()
             captcha_texto = _ocr_captcha(r_cap.content)
 
@@ -873,7 +884,7 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
                     "Content-Type": "application/x-www-form-urlencoded",
                     "Referer": r_login.url,
                 },
-                timeout=22,
+                timeout=SENIAT_TIMEOUT_POST,
                 allow_redirects=True,
             )
 
@@ -919,7 +930,10 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
                     continue
                 fu = urljoin(menu_base, src)
                 try:
-                    rf = session.get(fu, headers={**headers, "Referer": menu_base}, timeout=18, allow_redirects=True)
+                    rf = session.get(
+                        fu, headers={**headers, "Referer": menu_base},
+                        timeout=SENIAT_TIMEOUT_PAGE, allow_redirects=True,
+                    )
                     if rf.status_code == 200 and len(rf.text) > 400:
                         html_menu += "\n" + rf.text
                 except Exception:
@@ -941,14 +955,14 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
 
             def _intentar_url(url_consulta: str):
                 hdr = {**headers, "Referer": menu_base}
-                for doc in variantes_doc[:6]:
+                for doc in variantes_doc[:3]:
                     for pname in nombres_rif:
                         try:
                             r3 = session.get(
                                 url_consulta,
                                 params={pname: doc},
                                 headers=hdr,
-                                timeout=22,
+                                timeout=SENIAT_TIMEOUT_PAGE,
                                 allow_redirects=True,
                             )
                             if (
@@ -977,7 +991,7 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
                                 url_consulta,
                                 params=pdata,
                                 headers=hdr,
-                                timeout=22,
+                                timeout=SENIAT_TIMEOUT_PAGE,
                                 allow_redirects=True,
                             )
                             if (
@@ -1000,7 +1014,7 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
                                     **hdr,
                                     "Content-Type": "application/x-www-form-urlencoded",
                                 },
-                                timeout=22,
+                                timeout=SENIAT_TIMEOUT_POST,
                                 allow_redirects=True,
                             )
                             if (
@@ -1019,7 +1033,7 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
                             pass
                 return None
 
-            for url_consulta in endpoints_consulta[:12]:
+            for url_consulta in endpoints_consulta[:5]:
                 logger.info(f"SENIAT: Probando → {url_consulta}")
                 data_contribuyente = _intentar_url(url_consulta)
                 if data_contribuyente:
@@ -1046,7 +1060,14 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
         }
 
     except requests.exceptions.Timeout:
-        return {"error": True, "error_str": "⏱️ El SENIAT tardó demasiado en responder."}
+        return {
+            "error": True,
+            "error_str": (
+                "⏱️ El SENIAT tardó demasiado en responder. El portal suele ir lento; "
+                "reintenta. En Render puedes subir SENIAT_TIMEOUT_PAGE y SENIAT_TIMEOUT_PDF "
+                "(segundos) o poner SENIAT_SKIP_PLANILLA=1 para omitir la descarga del PDF."
+            ),
+        }
     except requests.exceptions.ConnectionError:
         return {"error": True, "error_str": "🔌 No se pudo conectar al portal del SENIAT."}
     except Exception as e:
