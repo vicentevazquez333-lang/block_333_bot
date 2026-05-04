@@ -19,6 +19,7 @@ env/
 
 # Datos locales Digitel (muy grandes; no subir al repo)
 BASE DE DATOS/digitel.sqlite
+BASE DE DATOS/gnb.sqlite
 BASE DE DATOS/DIGITEL.TXT
 
 # Logs

@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY bot.py digitel_sqlite.py .
+COPY bot.py digitel_sqlite.py gnb_sqlite.py .
 
 EXPOSE 8080
 

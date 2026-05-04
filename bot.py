@@ -530,6 +530,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "📲 *Comandos disponibles:*\n"
         "  /consultar — Iniciar una consulta\n"
         "  /digitel    — Buscar en base Digitel \\(tel / documento\\)\n"
+        "  /gnb        — Buscar en base GNB \\(cédula o nombre\\)\n"
         "  /help       — Ayuda\n"
         "  /start      — Volver al inicio\n\n"
         "O simplemente envíame un número de cédula directamente 👇"
@@ -547,7 +548,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "   `/consultar 23775072`\n\n"
         "Para cédulas extranjeras agrega la letra E:\n"
         "   `/consultar E1234567`\n\n"
-        "📡 Base Digitel \\(SQLite\\): `/digitel t` o `/digitel d` \\(ver /start\\)\n\n"
+        "📡 Digitel: `/digitel` · GNB: `/gnb` \\(ver /start\\)\n\n"
         "ℹ️ Datos que obtienes:\n"
         "  • Nombre completo\n"
         "  • R\\.I\\.F\\.\n"
@@ -664,6 +665,119 @@ async def digitel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         lines.append("… (hay más coincidencias en la base; límite 100 por consulta)")
 
     await msg.reply_text("\n".join(lines))
+
+
+def _gnb_parse_args(args: list[str]) -> tuple[str | None, str | None, bool]:
+    """
+    (modo, valor, necesita_ayuda). modo: 'c' cédula, 'n' fragmento nombre.
+    """
+    if not args:
+        return None, None, True
+    if len(args) == 1:
+        solo = "".join(c for c in args[0] if c.isdigit())
+        if solo and 4 <= len(solo) <= 12:
+            return "c", solo, False
+        frag = args[0].strip()
+        if len(frag) >= 3:
+            return "n", frag, False
+        return None, None, True
+    head = args[0].lower()
+    rest = " ".join(args[1:]).strip()
+    if not rest:
+        return None, None, True
+    if head in ("c", "cedula", "ced"):
+        dig = "".join(c for c in rest if c.isdigit())
+        return ("c", dig or rest, False) if (dig or rest).strip() else (None, None, True)
+    if head in ("n", "nombre", "a", "apellido", "apellidos"):
+        return "n", rest, False
+    return None, None, True
+
+
+async def gnb_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Consulta la base GNB (SQLite): por cédula o por fragmento de nombre."""
+    from gnb_sqlite import (
+        buscar_por_cedula,
+        buscar_por_nombre,
+        compactar_fila,
+        db_path,
+        ensure_gnb_database,
+    )
+
+    msg = update.effective_message
+    if not msg:
+        return
+    if not await ensure_user_allowed(update):
+        return
+
+    args = list(context.args or [])
+    mode, valor, need_help = _gnb_parse_args(args)
+    if need_help or not mode or not valor:
+        await msg.reply_text(
+            "Uso GNB:\n"
+            "  /gnb <cédula>     — ejemplo: /gnb 6857541\n"
+            "  /gnb c <cédula>   — igual, solo dígitos\n"
+            "  /gnb n <texto>    — buscar en apellidos/nombre (mín. 3 letras)\n"
+            "  /gnb nombre PEREZ — ejemplo por nombre\n\n"
+            "En Render: `GNB_DB` y opcional `GNB_DOWNLOAD_URL` (Release con gnb.sqlite)."
+        )
+        return
+
+    try:
+        if not db_path().is_file():
+            await msg.reply_text(
+                "⏳ Descargando la base GNB la primera vez "
+                "(puede tardar si el archivo es grande)…"
+            )
+        await asyncio.to_thread(ensure_gnb_database)
+    except FileNotFoundError as e:
+        await msg.reply_text(f"❌ {e}")
+        return
+    except Exception as e:
+        logger.exception("GNB: fallo al preparar la base: %s", e)
+        await msg.reply_text(
+            "❌ Error al preparar GNB. Revisa GNB_DOWNLOAD_URL / GNB_DB en el servidor."
+        )
+        return
+
+    if not db_path().is_file():
+        await msg.reply_text(
+            "📂 No hay base GNB.\n\n"
+            "• Local: `python import_gnb_sqlite.py`\n"
+            "• Nube: `GNB_DOWNLOAD_URL` + `GNB_DB` (ej. `/tmp/gnb.sqlite`)."
+        )
+        return
+
+    try:
+        if mode == "c":
+            rows = buscar_por_cedula(valor)
+            trunc = False
+        else:
+            rows, trunc = buscar_por_nombre(valor)
+    except FileNotFoundError as e:
+        await msg.reply_text(str(e))
+        return
+    except Exception as e:
+        logger.exception("GNB: error en consulta: %s", e)
+        await msg.reply_text("❌ Error al consultar GNB.")
+        return
+
+    if not rows:
+        await msg.reply_text("Sin resultados en GNB.")
+        return
+
+    bloques: list[str] = ["📋 GNB"]
+    max_filas = 6 if mode == "n" else 3
+    for i, r in enumerate(rows[:max_filas], 1):
+        bloques.append(f"\n── #{i} ──\n{compactar_fila(r)}")
+    if len(rows) > max_filas:
+        bloques.append(f"\n… (+{len(rows) - max_filas} filas más)")
+    if trunc:
+        bloques.append("\n… (hay más coincidencias; muestra limitada)")
+
+    texto = "\n".join(bloques)
+    if len(texto) > 4000:
+        texto = texto[:3990] + "\n… (mensaje recortado)"
+    await msg.reply_text(texto)
 
 
 async def consultar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -855,6 +969,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start, filters=uf))
     app.add_handler(CommandHandler("help", help_command, filters=uf))
     app.add_handler(CommandHandler("digitel", digitel_command, filters=uf))
+    app.add_handler(CommandHandler("gnb", gnb_command, filters=uf))
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(nueva_consulta_callback, pattern="^NUEVA_CONSULTA$"))
     app.add_handler(MessageHandler((filters.TEXT & ~filters.COMMAND) & uf, mensaje_directo))
