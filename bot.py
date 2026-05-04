@@ -24,6 +24,15 @@ try:
     OCR_DISPONIBLE = True
 except ImportError:
     OCR_DISPONIBLE = False
+
+try:
+    import fitz  # PyMuPDF
+    PDF_DISPONIBLE = True
+except ImportError:
+    PDF_DISPONIBLE = False
+
+# Tamaño máximo del extracto de planilla por mensaje (Telegram ~4096 con formato)
+SENIAT_PLANILLA_MAX_CHARS = 3200
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -475,6 +484,131 @@ def _seniat_valor_cedula_rifconsulta(nac_u: str, ced_digits: str) -> str:
     return f"{nac_u}{ced_digits}"
 
 
+def _seniat_pdf_a_texto(blob: bytes) -> str:
+    """Extrae texto plano de un PDF (planilla RIF)."""
+    if not PDF_DISPONIBLE or not blob or not blob.startswith(b"%PDF"):
+        return ""
+    try:
+        doc = fitz.open(stream=blob, filetype="pdf")
+        partes = []
+        for i in range(len(doc)):
+            partes.append(doc[i].get_text())
+        doc.close()
+        return re.sub(r"\n{3,}", "\n\n", "\n".join(partes)).strip()
+    except Exception as e:
+        logger.warning(f"SENIAT PDF: no se pudo leer el PDF: {e}")
+        return ""
+
+
+def _seniat_parse_fila_listado_contribuyentes(soup) -> dict:
+    """Tabla 'Listado de Contribuyentes' (RIF enlace, Nombres, Situación)."""
+    for table in soup.find_all("table"):
+        filas = table.find_all("tr")
+        if len(filas) < 2:
+            continue
+        cab = " ".join(c.get_text(" ", strip=True).lower() for c in filas[0].find_all(["th", "td"]))
+        if "rif" not in cab or "nombre" not in cab:
+            continue
+        for fila in filas[1:]:
+            celdas = fila.find_all("td")
+            if len(celdas) < 3:
+                continue
+            a = celdas[0].find("a", href=True)
+            rif_t = (a.get_text(strip=True) if a else celdas[0].get_text(strip=True)) or ""
+            nombres = celdas[1].get_text(" ", strip=True)
+            situacion = celdas[2].get_text(" ", strip=True)
+            if rif_t and re.match(r"^[VEJPG]\d{5,14}$", rif_t, re.I):
+                d = {}
+                if rif_t:
+                    d["RIF"] = rif_t
+                if nombres:
+                    d["Nombres"] = nombres
+                if situacion:
+                    d["Situación"] = situacion
+                return d
+    return {}
+
+
+def _seniat_listado_enlace_ficha_rif(soup, base_url: str, rif_busqueda: str) -> str | None:
+    """URL del enlace azul bajo la columna RIF (primera fila que case con la cédula buscada)."""
+    norm = re.sub(r"\D", "", rif_busqueda or "")
+    pref = (rif_busqueda or "V")[:1].upper()
+    candidatos: list[tuple[str, str]] = []
+    for table in soup.find_all("table"):
+        for a in table.find_all("a", href=True):
+            label = (a.get_text(strip=True) or "").upper().replace(" ", "")
+            if not re.match(r"^[VEJPG]\d{5,14}$", label, re.I):
+                continue
+            href = a["href"].strip()
+            if href.lower().startswith("javascript:"):
+                continue
+            full = urljoin(base_url, href)
+            dig = re.sub(r"\D", "", label)
+            candidatos.append((full, dig))
+    for full, dig in candidatos:
+        if norm and (dig.startswith(norm) or norm in dig or dig[: len(norm)] == norm[: len(dig)]):
+            return full
+    for full, dig in candidatos:
+        if dig.startswith(pref):
+            return full
+    return candidatos[0][0] if candidatos else None
+
+
+def _seniat_enlace_ver_planilla(soup, page_url: str) -> str | None:
+    """Menú lateral: enlace 'Ver Planilla'."""
+    for a in soup.find_all("a", href=True):
+        texto = a.get_text(" ", strip=True).lower()
+        href = a["href"].strip()
+        if "javascript:" in href.lower():
+            continue
+        if "ver planilla" in texto or (texto == "planilla" and "ver" in (a.get("title") or "").lower()):
+            return urljoin(page_url, href)
+        low = href.lower()
+        if "planilla" in low and (".do" in low or ".jsp" in low):
+            return urljoin(page_url, href)
+    return None
+
+
+def _seniat_descargar_texto_planilla(
+    session, url: str, headers: dict, referer: str, depth: int = 0
+) -> str | None:
+    """GET de la planilla: PDF directo o HTML con iframe/enlace al PDF."""
+    if depth > 6:
+        return None
+    hdr = {**headers, "Referer": referer, "Accept": "text/html,application/pdf;q=0.9,*/*;q=0.8"}
+    try:
+        r = session.get(url, headers=hdr, timeout=45, allow_redirects=True)
+    except Exception as e:
+        logger.warning(f"SENIAT planilla GET: {e}")
+        return None
+    data = r.content
+    ctype = (r.headers.get("Content-Type") or "").lower()
+    if "pdf" in ctype or (data[:5] if len(data) > 5 else b"").startswith(b"%PDF"):
+        txt = _seniat_pdf_a_texto(data)
+        return txt if txt else None
+    if "html" not in ctype and len(data) > 100:
+        txt = _seniat_pdf_a_texto(data)
+        if txt:
+            return txt
+    soup = BeautifulSoup(r.text or "", "html.parser")
+    for tag in soup.find_all(["iframe", "frame", "embed"], src=True):
+        src = (tag.get("src") or "").strip()
+        if not src or "javascript:" in src.lower():
+            continue
+        sub = urljoin(r.url, src)
+        if ".pdf" in sub.lower() or "pdf" in sub.lower() or "planilla" in sub.lower():
+            t = _seniat_descargar_texto_planilla(session, sub, headers, r.url, depth + 1)
+            if t:
+                return t
+    for a in soup.find_all("a", href=True):
+        h = a["href"].strip()
+        if ".pdf" in h.lower() or "planilla" in h.lower():
+            t = _seniat_descargar_texto_planilla(session, urljoin(r.url, h), headers, r.url, depth + 1)
+            if t:
+                return t
+    return None
+
+
 def _seniat_parse_form_busqueda_rifconsulta(soup, page_url: str):
     """
     Formulario 'Búsqueda de Contribuyentes Activos' en rifconsulta.
@@ -548,8 +682,8 @@ def _seniat_rifconsulta_buscar_contribuyente(
     rif_busqueda: str,
 ) -> dict | None:
     """
-    Tras login iSENIAT: abre rifconsulta/login.do y envía la cédula en el campo indicado.
-    Retorna dict parseado o None si no aplica / falla.
+    Tras login iSENIAT: rifconsulta → Buscar por cédula → enlace RIF → Ver Planilla → texto PDF.
+    Retorna {"data": dict, "planilla": str|None} o None si no aplica / falla del todo.
     """
     menu_base = r_post_login.url
     hdr = {**headers, "Referer": menu_base}
@@ -621,8 +755,42 @@ def _seniat_rifconsulta_buscar_contribuyente(
         texto = soup1.get_text(separator=" ", strip=True)
         if not _seniat_respuesta_tiene_datos(texto):
             return None
-        data = _parsear_datos_seniat(soup1, texto, rif_busqueda)
-        return data if data else None
+
+        data = _parsear_datos_seniat(soup1, texto, rif_busqueda) or {}
+        listado = _seniat_parse_fila_listado_contribuyentes(soup1)
+        for k, v in listado.items():
+            if v and (k not in data or not data.get(k)):
+                data[k] = v
+
+        planilla_txt: str | None = None
+        rif_href = _seniat_listado_enlace_ficha_rif(soup1, r1.url, rif_busqueda)
+        if rif_href:
+            logger.info("SENIAT: abriendo ficha desde enlace RIF del listado...")
+            r2 = session.get(
+                rif_href,
+                headers={**headers, "Referer": r1.url},
+                timeout=28,
+                allow_redirects=True,
+            )
+            if r2.status_code == 200 and len(r2.text) > 300 and not _seniat_sigue_en_login(r2.text):
+                soup2 = BeautifulSoup(r2.text, "html.parser")
+                t2 = soup2.get_text(separator=" ", strip=True)
+                data2 = _parsear_datos_seniat(soup2, t2, rif_busqueda) or {}
+                for k, v in data2.items():
+                    if v and (k not in data or len(str(v)) > len(str(data.get(k, "")))):
+                        data[k] = v
+                plan_url = _seniat_enlace_ver_planilla(soup2, r2.url)
+                if plan_url:
+                    logger.info("SENIAT: descargando planilla PDF (Ver Planilla)...")
+                    planilla_txt = _seniat_descargar_texto_planilla(
+                        session, plan_url, headers, r2.url
+                    )
+
+        if not data and not planilla_txt:
+            return None
+        if not data:
+            data = {"Nota": "Solo se obtuvo texto de planilla PDF"}
+        return {"data": data, "planilla": planilla_txt}
     except Exception as e:
         logger.warning(f"SENIAT rifconsulta: {e}")
         return None
@@ -727,11 +895,16 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
         nac_u = (nacionalidad or "V").strip().upper()[:1]
         rif_busqueda = f"{nac_u}{ced_digits}"
         variantes_doc = _seniat_variantes_documento(nacionalidad, cedula)
+        planilla_texto = None
 
         logger.info("SENIAT: Consulta rifconsulta (Cédula / Pasaporte)...")
-        data_contribuyente = _seniat_rifconsulta_buscar_contribuyente(
+        rif_out = _seniat_rifconsulta_buscar_contribuyente(
             session, headers, r_post_login, nacionalidad, cedula, rif_busqueda
         )
+        data_contribuyente = None
+        if rif_out:
+            data_contribuyente = rif_out.get("data") or {}
+            planilla_texto = rif_out.get("planilla")
 
         if not data_contribuyente:
             # ── Respaldo: menú iSENIAT + otros endpoints ──
@@ -865,7 +1038,12 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
             }
 
         logger.info(f"SENIAT: Consulta exitosa para {rif_busqueda}")
-        return {"error": False, "data": data_contribuyente, "captcha_intentos": intento}
+        return {
+            "error": False,
+            "data": data_contribuyente,
+            "captcha_intentos": intento,
+            "planilla_texto": planilla_texto,
+        }
 
     except requests.exceptions.Timeout:
         return {"error": True, "error_str": "⏱️ El SENIAT tardó demasiado en responder."}
@@ -915,7 +1093,13 @@ def _parsear_datos_seniat(soup, texto: str, rif_busqueda: str) -> dict:
     return {}
 
 
-def formatear_respuesta_seniat(data: dict, nac: str, ced: str, intentos: int = 1) -> str:
+def formatear_respuesta_seniat(
+    data: dict,
+    nac: str,
+    ced: str,
+    intentos: int = 1,
+    planilla_texto: str | None = None,
+) -> str:
     """Formatea los datos del SENIAT para Telegram MarkdownV2."""
     lin = []
     lin.append(escape_md("╔══════════════════════════╗"))
@@ -933,10 +1117,12 @@ def formatear_respuesta_seniat(data: dict, nac: str, ced: str, intentos: int = 1
         "domicilio":  "📍", "dirección": "📍", "direccion": "📍",
         "actividad":  "💼",
         "estatus":    "🔖", "estado":    "🔖", "status":    "🔖",
+        "situación":  "🔖", "situacion": "🔖",
         "teléfono":   "📞", "telefono":  "📞",
         "correo":     "📧", "email":     "📧",
         "municipio":  "🏘️",
         "parroquia":  "⛪",
+        "nota":      "ℹ️",
     }
 
     for key, val in data.items():
@@ -946,6 +1132,14 @@ def formatear_respuesta_seniat(data: dict, nac: str, ced: str, intentos: int = 1
         emoji = next((v for k, v in claves_emoji.items() if k in key_lower), "▪️")
         lin.append(f"{emoji}  *{escape_md(key)}:*")
         lin.append(f"    `{escape_md(str(val), True)}`")
+
+    if planilla_texto and planilla_texto.strip():
+        frag = planilla_texto.strip()
+        if len(frag) > SENIAT_PLANILLA_MAX_CHARS:
+            frag = frag[:SENIAT_PLANILLA_MAX_CHARS].rstrip() + "\n…"
+        lin.append("")
+        lin.append(f"📄 *{escape_md('Planilla RIF (texto del PDF):')}*")
+        lin.append(f"`{escape_md(frag, True)}`")
 
     return "\n".join(lin)
 
@@ -1234,10 +1428,24 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
             )
         else:
             intentos = result_seniat.get("captcha_intentos", 1)
+            planilla = result_seniat.get("planilla_texto")
             txt_seniat = formatear_respuesta_seniat(
-                result_seniat.get("data", {}), nacionalidad, cedula, intentos
+                result_seniat.get("data", {}),
+                nacionalidad,
+                cedula,
+                intentos,
+                planilla_texto=planilla,
             )
             await update.message.reply_text(txt_seniat, parse_mode="MarkdownV2")
+            if planilla and len(planilla.strip()) > SENIAT_PLANILLA_MAX_CHARS:
+                resto = planilla.strip()[SENIAT_PLANILLA_MAX_CHARS:]
+                while resto:
+                    trozo = resto[:4000]
+                    resto = resto[4000:]
+                    await update.message.reply_text(
+                        "📄 Planilla (continuación del PDF)\n\n" + trozo,
+                        parse_mode=None,
+                    )
     except Exception as e:
         logger.error(f"Error enviando mensaje SENIAT: {e}")
         await update.message.reply_text(
