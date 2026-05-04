@@ -67,6 +67,9 @@ INTT_PASS      = os.environ.get("INTT_PASS", "30743649Ee.")
 SENIAT_BASE    = "http://contribuyente.seniat.gob.ve"
 SENIAT_LOGIN   = f"{SENIAT_BASE}/iseniatlogin/contribuyente.do"
 SENIAT_CAPTCHA = f"{SENIAT_BASE}/iseniatlogin/kapatcha/kapatch.jpg"
+# Consulta RUI / contribuyentes activos (tras sesión iSENIAT)
+SENIAT_RIFCONSULTA_LOGIN = f"{SENIAT_BASE}/rifconsulta/login.do"
+SENIAT_PAGINA_PRINCIPAL  = f"{SENIAT_BASE}/iseniatlogin/paginaprincipal.do"
 
 SENIAT_USER    = os.environ.get("SENIAT_USER", "V20878510")
 SENIAT_PASS    = os.environ.get("SENIAT_PASS", "v20878510")
@@ -397,7 +400,7 @@ def _seniat_extraer_urls_consulta(html: str, base_url: str) -> list[str]:
     """Enlaces .do/.jsp del menú post-login (consulta de contribuyente, RIF, etc.)."""
     skip = (
         "javascript:", "logout", "cerrar", "salir", "olvido", "recclave",
-        "registronat", "kapatcha/", "login.do", "window.close",
+        "registronat", "kapatcha/", "/iseniatlogin/login.do", "window.close",
     )
     keys = (
         "consulta", "buscar", "contribuyente", "rif", "datos", "ciudadano",
@@ -451,8 +454,178 @@ def _seniat_respuesta_tiene_datos(texto_plano: str) -> bool:
     t = texto_plano.upper()
     return any(
         kw in t
-        for kw in ("RIF", "NOMBRE", "RAZÓN", "RAZON", "CONTRIBUYENTE", "DOMICILIO", "ACTIVIDAD")
+        for kw in (
+            "RIF", "NOMBRE", "RAZÓN", "RAZON", "CONTRIBUYENTE", "DOMICILIO", "ACTIVIDAD",
+            "BÚSQUEDA", "BUSQUEDA", "CONTRIBUYENTES ACTIVOS", "REGISTRO ÚNICO",
+        )
     )
+
+
+def _seniat_rifconsulta_pagina_error(html: str) -> bool:
+    low = (html or "").lower()
+    return (
+        "operación inválida" in low
+        or "operacion invalida" in low
+        or "no es posible procesar" in low
+    )
+
+
+def _seniat_valor_cedula_rifconsulta(nac_u: str, ced_digits: str) -> str:
+    """Portal: CI con letra V/E, sin guiones ni puntos (ej. V12345678)."""
+    return f"{nac_u}{ced_digits}"
+
+
+def _seniat_parse_form_busqueda_rifconsulta(soup, page_url: str):
+    """
+    Formulario 'Búsqueda de Contribuyentes Activos' en rifconsulta.
+    Retorna (post_url, payload_inicial, nombre_campo_cedula, submit_name, submit_value) o Nones.
+    """
+    for form in soup.find_all("form", method=re.compile("post", re.I)):
+        blob = form.get_text(" ").lower()
+        if not any(
+            x in blob
+            for x in ("cédula", "cedula", "pasaporte", "contribuyente", "rif", "apellido", "razón", "razon")
+        ):
+            continue
+        action = (form.get("action") or "").strip() or "/rifconsulta/login.do"
+        post_url = urljoin(page_url, action)
+        payload = {}
+        for inp in form.find_all("input", {"type": "hidden"}):
+            n = inp.get("name")
+            if n:
+                payload[n] = inp.get("value") or ""
+        ced_name = None
+        for tr in form.find_all("tr"):
+            tds = tr.find_all("td")
+            if len(tds) < 2:
+                continue
+            label = tds[0].get_text(" ", strip=True).lower()
+            if ("cédula" in label or "cedula" in label or "pasaporte" in label) and (
+                "apellido" not in label and "razón" not in label and "razon" not in label
+            ):
+                inp = None
+                for td in tds[1:]:
+                    inp = td.find("input", attrs={"type": re.compile(r"text|search", re.I)})
+                    if inp:
+                        break
+                if inp and inp.get("name"):
+                    ced_name = inp["name"]
+                    break
+        if not ced_name:
+            for guess in (
+                "cedulaPasaporte",
+                "cedula",
+                "cedulaPasaport",
+                "documento",
+                "numDocumento",
+                "pCedula",
+                "cit",
+                "ci",
+                "documentoIdentidad",
+            ):
+                el = form.find("input", attrs={"name": guess})
+                if el:
+                    ced_name = guess
+                    break
+        if not ced_name:
+            continue
+        submit_name, submit_val = None, None
+        for inp in form.find_all("input", attrs={"type": re.compile(r"submit|image", re.I)}):
+            submit_name = inp.get("name")
+            submit_val = inp.get("value") or ""
+            if "buscar" in submit_val.lower():
+                break
+        return post_url, payload, ced_name, submit_name, submit_val
+    return None, None, None, None, None
+
+
+def _seniat_rifconsulta_buscar_contribuyente(
+    session,
+    headers: dict,
+    r_post_login,
+    nacionalidad: str,
+    cedula: str,
+    rif_busqueda: str,
+) -> dict | None:
+    """
+    Tras login iSENIAT: abre rifconsulta/login.do y envía la cédula en el campo indicado.
+    Retorna dict parseado o None si no aplica / falla.
+    """
+    menu_base = r_post_login.url
+    hdr = {**headers, "Referer": menu_base}
+    try:
+        r0 = session.get(
+            SENIAT_RIFCONSULTA_LOGIN,
+            headers=hdr,
+            timeout=22,
+            allow_redirects=True,
+        )
+        if _seniat_rifconsulta_pagina_error(r0.text):
+            logger.info("SENIAT: rifconsulta requiere paso por página principal; reintentando...")
+            session.get(
+                SENIAT_PAGINA_PRINCIPAL,
+                headers={**headers, "Referer": menu_base},
+                timeout=18,
+                allow_redirects=True,
+            )
+            r0 = session.get(
+                SENIAT_RIFCONSULTA_LOGIN,
+                headers={**headers, "Referer": SENIAT_PAGINA_PRINCIPAL},
+                timeout=22,
+                allow_redirects=True,
+            )
+        if _seniat_rifconsulta_pagina_error(r0.text):
+            logger.warning("SENIAT: rifconsulta devolvió error de portal (sin formulario).")
+            return None
+
+        soup = BeautifulSoup(r0.text, "html.parser")
+        post_url, base_payload, ced_name, submit_name, submit_val = _seniat_parse_form_busqueda_rifconsulta(
+            soup, r0.url
+        )
+        if not post_url or not ced_name:
+            logger.warning("SENIAT: no se detectó el formulario de búsqueda en rifconsulta/login.do")
+            return None
+
+        nac_u = (nacionalidad or "V").strip().upper()[:1]
+        ced_digits = re.sub(r"\D", "", str(cedula or ""))
+        valor_ci = _seniat_valor_cedula_rifconsulta(nac_u, ced_digits)
+
+        payload = dict(base_payload)
+        for inp in soup.find_all("input"):
+            itype = (inp.get("type") or "text").lower()
+            name = inp.get("name")
+            if not name or itype == "hidden" or itype == "submit" or itype == "image":
+                continue
+            if itype in ("text", "search") and name != ced_name and name not in payload:
+                payload[name] = ""
+        payload[ced_name] = valor_ci
+        if submit_name:
+            payload[submit_name] = submit_val or ""
+
+        r1 = session.post(
+            post_url,
+            data=payload,
+            headers={
+                **headers,
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Referer": r0.url,
+            },
+            timeout=25,
+            allow_redirects=True,
+        )
+        if r1.status_code != 200 or len(r1.text) < 400:
+            return None
+        if _seniat_sigue_en_login(r1.text):
+            return None
+        soup1 = BeautifulSoup(r1.text, "html.parser")
+        texto = soup1.get_text(separator=" ", strip=True)
+        if not _seniat_respuesta_tiene_datos(texto):
+            return None
+        data = _parsear_datos_seniat(soup1, texto, rif_busqueda)
+        return data if data else None
+    except Exception as e:
+        logger.warning(f"SENIAT rifconsulta: {e}")
+        return None
 
 
 def _ocr_captcha(img_bytes: bytes) -> str:
@@ -555,124 +728,129 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
         rif_busqueda = f"{nac_u}{ced_digits}"
         variantes_doc = _seniat_variantes_documento(nacionalidad, cedula)
 
-        # ── Menú: HTML principal + frames (menús suelen ir en frames) ──
-        html_menu = r_post_login.text
-        menu_base = r_post_login.url
-        s_menu = BeautifulSoup(html_menu, "html.parser")
-        for tag in s_menu.find_all(["frame", "iframe"], src=True):
-            src = (tag.get("src") or "").strip()
-            if not src or src.lower().startswith("javascript:"):
-                continue
-            if ".do" not in src.lower() and ".jsp" not in src.lower():
-                continue
-            fu = urljoin(menu_base, src)
-            try:
-                rf = session.get(fu, headers={**headers, "Referer": menu_base}, timeout=18, allow_redirects=True)
-                if rf.status_code == 200 and len(rf.text) > 400:
-                    html_menu += "\n" + rf.text
-            except Exception:
-                pass
+        logger.info("SENIAT: Consulta rifconsulta (Cédula / Pasaporte)...")
+        data_contribuyente = _seniat_rifconsulta_buscar_contribuyente(
+            session, headers, r_post_login, nacionalidad, cedula, rif_busqueda
+        )
 
-        endpoints_consulta = []
-        vistos = set()
-        for u in _seniat_extraer_urls_consulta(html_menu, menu_base):
-            if u not in vistos:
-                vistos.add(u)
-                endpoints_consulta.append(u)
-        for u in SENIAT_CONSULTA_FALLBACK:
-            if u not in vistos:
-                vistos.add(u)
-                endpoints_consulta.append(u)
+        if not data_contribuyente:
+            # ── Respaldo: menú iSENIAT + otros endpoints ──
+            html_menu = r_post_login.text
+            menu_base = r_post_login.url
+            s_menu = BeautifulSoup(html_menu, "html.parser")
+            for tag in s_menu.find_all(["frame", "iframe"], src=True):
+                src = (tag.get("src") or "").strip()
+                if not src or src.lower().startswith("javascript:"):
+                    continue
+                if ".do" not in src.lower() and ".jsp" not in src.lower():
+                    continue
+                fu = urljoin(menu_base, src)
+                try:
+                    rf = session.get(fu, headers={**headers, "Referer": menu_base}, timeout=18, allow_redirects=True)
+                    if rf.status_code == 200 and len(rf.text) > 400:
+                        html_menu += "\n" + rf.text
+                except Exception:
+                    pass
 
-        nombres_rif = ("rif", "numRif", "numeroRif", "nroRif", "p_rif", "rifContribuyente")
-        nombres_ced = ("cedula", "p_cedula", "documento", "numDocumento", "identificacion")
+            endpoints_consulta = []
+            vistos = set()
+            for u in _seniat_extraer_urls_consulta(html_menu, menu_base):
+                if u not in vistos:
+                    vistos.add(u)
+                    endpoints_consulta.append(u)
+            for u in SENIAT_CONSULTA_FALLBACK:
+                if u not in vistos:
+                    vistos.add(u)
+                    endpoints_consulta.append(u)
 
-        def _intentar_url(url_consulta: str):
-            hdr = {**headers, "Referer": menu_base}
-            for doc in variantes_doc[:6]:
-                for pname in nombres_rif:
-                    try:
-                        r3 = session.get(
-                            url_consulta,
-                            params={pname: doc},
-                            headers=hdr,
-                            timeout=22,
-                            allow_redirects=True,
-                        )
-                        if (
-                            r3.status_code == 200
-                            and len(r3.text) > 900
-                            and "index.htm" not in (r3.url or "").lower()
-                            and not _seniat_sigue_en_login(r3.text)
-                        ):
-                            soup3 = BeautifulSoup(r3.text, "html.parser")
-                            page3_text = soup3.get_text(separator=" ", strip=True)
-                            if _seniat_respuesta_tiene_datos(page3_text):
-                                data = _parsear_datos_seniat(soup3, page3_text, rif_busqueda)
-                                if data:
-                                    return data
-                    except Exception:
-                        pass
-                base_data = {
-                    "nacionalidad": (nacionalidad or "V").strip().upper()[:1],
-                    "nac": (nacionalidad or "V").strip().upper()[:1],
-                    "numero": ced_digits,
-                }
-                for pname in nombres_ced:
-                    try:
-                        pdata = {**base_data, pname: doc}
-                        r3 = session.get(
-                            url_consulta,
-                            params=pdata,
-                            headers=hdr,
-                            timeout=22,
-                            allow_redirects=True,
-                        )
-                        if (
-                            r3.status_code == 200
-                            and len(r3.text) > 900
-                            and "index.htm" not in (r3.url or "").lower()
-                            and not _seniat_sigue_en_login(r3.text)
-                        ):
-                            soup3 = BeautifulSoup(r3.text, "html.parser")
-                            page3_text = soup3.get_text(separator=" ", strip=True)
-                            if _seniat_respuesta_tiene_datos(page3_text):
-                                data = _parsear_datos_seniat(soup3, page3_text, rif_busqueda)
-                                if data:
-                                    return data
-                        pdata_post = {**base_data, pname: doc}
-                        r4 = session.post(
-                            url_consulta,
-                            data=pdata_post,
-                            headers={
-                                **hdr,
-                                "Content-Type": "application/x-www-form-urlencoded",
-                            },
-                            timeout=22,
-                            allow_redirects=True,
-                        )
-                        if (
-                            r4.status_code == 200
-                            and len(r4.text) > 900
-                            and "index.htm" not in (r4.url or "").lower()
-                            and not _seniat_sigue_en_login(r4.text)
-                        ):
-                            soup4 = BeautifulSoup(r4.text, "html.parser")
-                            page4_text = soup4.get_text(separator=" ", strip=True)
-                            if _seniat_respuesta_tiene_datos(page4_text):
-                                data = _parsear_datos_seniat(soup4, page4_text, rif_busqueda)
-                                if data:
-                                    return data
-                    except Exception:
-                        pass
-            return None
+            nombres_rif = ("rif", "numRif", "numeroRif", "nroRif", "p_rif", "rifContribuyente")
+            nombres_ced = ("cedula", "p_cedula", "documento", "numDocumento", "identificacion")
 
-        data_contribuyente = None
-        for url_consulta in endpoints_consulta[:12]:
-            logger.info(f"SENIAT: Probando → {url_consulta}")
-            data_contribuyente = _intentar_url(url_consulta)
-            if data_contribuyente:
-                break
+            def _intentar_url(url_consulta: str):
+                hdr = {**headers, "Referer": menu_base}
+                for doc in variantes_doc[:6]:
+                    for pname in nombres_rif:
+                        try:
+                            r3 = session.get(
+                                url_consulta,
+                                params={pname: doc},
+                                headers=hdr,
+                                timeout=22,
+                                allow_redirects=True,
+                            )
+                            if (
+                                r3.status_code == 200
+                                and len(r3.text) > 900
+                                and "index.htm" not in (r3.url or "").lower()
+                                and not _seniat_sigue_en_login(r3.text)
+                            ):
+                                soup3 = BeautifulSoup(r3.text, "html.parser")
+                                page3_text = soup3.get_text(separator=" ", strip=True)
+                                if _seniat_respuesta_tiene_datos(page3_text):
+                                    data = _parsear_datos_seniat(soup3, page3_text, rif_busqueda)
+                                    if data:
+                                        return data
+                        except Exception:
+                            pass
+                    base_data = {
+                        "nacionalidad": (nacionalidad or "V").strip().upper()[:1],
+                        "nac": (nacionalidad or "V").strip().upper()[:1],
+                        "numero": ced_digits,
+                    }
+                    for pname in nombres_ced:
+                        try:
+                            pdata = {**base_data, pname: doc}
+                            r3 = session.get(
+                                url_consulta,
+                                params=pdata,
+                                headers=hdr,
+                                timeout=22,
+                                allow_redirects=True,
+                            )
+                            if (
+                                r3.status_code == 200
+                                and len(r3.text) > 900
+                                and "index.htm" not in (r3.url or "").lower()
+                                and not _seniat_sigue_en_login(r3.text)
+                            ):
+                                soup3 = BeautifulSoup(r3.text, "html.parser")
+                                page3_text = soup3.get_text(separator=" ", strip=True)
+                                if _seniat_respuesta_tiene_datos(page3_text):
+                                    data = _parsear_datos_seniat(soup3, page3_text, rif_busqueda)
+                                    if data:
+                                        return data
+                            pdata_post = {**base_data, pname: doc}
+                            r4 = session.post(
+                                url_consulta,
+                                data=pdata_post,
+                                headers={
+                                    **hdr,
+                                    "Content-Type": "application/x-www-form-urlencoded",
+                                },
+                                timeout=22,
+                                allow_redirects=True,
+                            )
+                            if (
+                                r4.status_code == 200
+                                and len(r4.text) > 900
+                                and "index.htm" not in (r4.url or "").lower()
+                                and not _seniat_sigue_en_login(r4.text)
+                            ):
+                                soup4 = BeautifulSoup(r4.text, "html.parser")
+                                page4_text = soup4.get_text(separator=" ", strip=True)
+                                if _seniat_respuesta_tiene_datos(page4_text):
+                                    data = _parsear_datos_seniat(soup4, page4_text, rif_busqueda)
+                                    if data:
+                                        return data
+                        except Exception:
+                            pass
+                return None
+
+            for url_consulta in endpoints_consulta[:12]:
+                logger.info(f"SENIAT: Probando → {url_consulta}")
+                data_contribuyente = _intentar_url(url_consulta)
+                if data_contribuyente:
+                    break
 
         if not data_contribuyente:
             soup2 = BeautifulSoup(r_post_login.text, "html.parser")
