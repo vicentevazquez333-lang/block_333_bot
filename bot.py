@@ -557,6 +557,25 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await update.message.reply_text(texto, parse_mode="MarkdownV2")
 
 
+def _digitel_parse_args(args: list[str]) -> tuple[str | None, str | None, bool]:
+    """
+    Devuelve (modo, valor, necesita_texto_ayuda).
+    modo: t / d (interno). Un solo argumento solo dígitos: >=11 o empieza por 58 → teléfono; 5–10 → documento.
+    """
+    if not args:
+        return None, None, True
+    if len(args) >= 2:
+        return args[0].lower(), " ".join(args[1:]), False
+    solo = "".join(c for c in args[0] if c.isdigit())
+    if not solo:
+        return None, None, True
+    if len(solo) >= 11 or solo.startswith("58"):
+        return "t", solo, False
+    if 5 <= len(solo) <= 10:
+        return "d", solo, False
+    return None, None, True
+
+
 async def digitel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Consulta la base Digitel importada en SQLite (índices en teléfono y documento)."""
     from digitel_sqlite import (
@@ -566,32 +585,51 @@ async def digitel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ensure_digitel_database,
     )
 
-    if len(context.args) < 2:
-        await update.message.reply_text(
+    msg = update.effective_message
+    if not msg:
+        return
+    if not await ensure_user_allowed(update):
+        return
+
+    args = list(context.args or [])
+    mode, valor, need_help = _digitel_parse_args(args)
+    if need_help or not mode or not valor:
+        await msg.reply_text(
             "Uso:\n"
             "  /digitel t <telefono>   — ejemplo: /digitel t 584123280905\n"
-            "  /digitel d <documento> — solo dígitos, ej: /digitel d 303591710\n\n"
+            "  /digitel d <documento> — solo dígitos, ej: /digitel d 303591710\n"
+            "  /digitel 584123280905  — solo número largo (58…) = teléfono\n"
+            "  /digitel 303591710     — 5–10 dígitos = documento\n\n"
             "Abreviaturas: t / tel / telefono · d / doc / documento"
         )
         return
 
-    mode = context.args[0].lower()
-    valor = " ".join(context.args[1:])
-
     if mode not in ("t", "tel", "telefono", "d", "doc", "documento"):
-        await update.message.reply_text(
+        await msg.reply_text(
             "Indica modo `t` (teléfono) o `d` (documento) primero."
         )
         return
 
     try:
-        ensure_digitel_database()
+        if not db_path().is_file():
+            await msg.reply_text(
+                "⏳ Descargando la base Digitel la primera vez "
+                "(varios minutos si el archivo es grande). No cierres el chat…"
+            )
+        await asyncio.to_thread(ensure_digitel_database)
     except FileNotFoundError as e:
-        await update.message.reply_text(f"❌ {e}")
+        await msg.reply_text(f"❌ {e}")
+        return
+    except Exception as e:
+        logger.exception("Digitel: fallo al preparar la base: %s", e)
+        await msg.reply_text(
+            "❌ Error al preparar la base Digitel. Revisa DIGITEL_DOWNLOAD_URL / "
+            "DIGITEL_DB y los logs del servidor."
+        )
         return
 
     if not db_path().is_file():
-        await update.message.reply_text(
+        await msg.reply_text(
             "📂 No hay base Digitel en esta máquina.\n\n"
             "• Local: `python import_digitel_sqlite.py`\n"
             "• Nube: variables `DIGITEL_DOWNLOAD_URL` (URL pública del .sqlite) y "
@@ -599,21 +637,21 @@ async def digitel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
         return
 
-    if mode in ("t", "tel", "telefono"):
-        try:
+    try:
+        if mode in ("t", "tel", "telefono"):
             rows, trunc = buscar_por_telefono(valor)
-        except FileNotFoundError as e:
-            await update.message.reply_text(str(e))
-            return
-    elif mode in ("d", "doc", "documento"):
-        try:
+        else:
             rows, trunc = buscar_por_documento(valor)
-        except FileNotFoundError as e:
-            await update.message.reply_text(str(e))
-            return
+    except FileNotFoundError as e:
+        await msg.reply_text(str(e))
+        return
+    except Exception as e:
+        logger.exception("Digitel: error en consulta: %s", e)
+        await msg.reply_text("❌ Error al consultar Digitel.")
+        return
 
     if not rows:
-        await update.message.reply_text("Sin resultados en Digitel.")
+        await msg.reply_text("Sin resultados en Digitel.")
         return
 
     max_lines = 40
@@ -625,7 +663,7 @@ async def digitel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if trunc:
         lines.append("… (hay más coincidencias en la base; límite 100 por consulta)")
 
-    await update.message.reply_text("\n".join(lines))
+    await msg.reply_text("\n".join(lines))
 
 
 async def consultar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
