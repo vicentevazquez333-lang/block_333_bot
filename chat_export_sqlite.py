@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -29,6 +30,76 @@ _LOCK = threading.Lock()
 
 _PROJECT_ROOT = Path(__file__).resolve().parent
 _DEFAULT_DB = _PROJECT_ROOT / "BASE DE DATOS" / "chat_log.sqlite"
+
+# Telegram MarkdownV2 / Markdown decorativo → texto plano en exportaciones
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F1E0-\U0001F1FF"
+    "\U0001F300-\U0001FAFF"
+    "\U00002700-\U000027BF"
+    "\U000024C2-\U000025AB"
+    "\U00002300-\U000023FF"
+    "\U000020D0-\U000020FF"
+    "\U0000FE00-\U0000FE0F"
+    "\U0001F000-\U0001F02F"
+    "]+",
+    flags=re.UNICODE,
+)
+
+
+def strip_emojis(s: str) -> str:
+    s = _EMOJI_RE.sub("", s)
+    return s.replace("\ufe0f", "")
+
+
+def clean_export_text(text: str, *, strip_emoji: bool = True) -> str:
+    """
+    Quita Markdown/MarkdownV2, backticks y decoración típica del bot para PDF/TXT legibles.
+    """
+    if not text:
+        return ""
+    t = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Código inline `texto`
+    t = re.sub(r"`([^`]*)`", r"\1", t)
+    t = t.replace("`", "")
+    # Desescapar MarkdownV2 (\ antes de caracteres reservados)
+    for _ in range(4):
+        nxt = re.sub(r'\\([_*\[\]()~`>#+\-=|{}.!\\])', r"\1", t)
+        if nxt == t:
+            break
+        t = nxt
+    # Negrita **x** y *x*
+    t = re.sub(r"\*\*([^*]+)\*\*", r"\1", t)
+    t = re.sub(r"\*([^*\n]+)\*", r"\1", t)
+    t = re.sub(r"\*+", "", t)
+    # __subrayado__
+    t = re.sub(r"__([^_\n]+)__", r"\1", t)
+    # ~~tachado~~
+    t = re.sub(r"~~([^~\n]+)~~", r"\1", t)
+    lines_out: list[str] = []
+    for line in t.split("\n"):
+        raw = line.strip()
+        if not raw:
+            lines_out.append("")
+            continue
+        if re.fullmatch(r"[?¿.\s_*\-─══┃╔╗╝]{6,}", raw):
+            continue
+        if re.fullmatch(r"[?]{4,}", raw):
+            continue
+        lines_out.append(line.rstrip())
+    t = "\n".join(lines_out)
+    t = "\n".join(re.sub(r" {2,}", " ", ln).strip() for ln in t.split("\n"))
+    if strip_emoji:
+        t = strip_emojis(t)
+    t = re.sub(r"[?¿]{4,}", "", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
+def _pdf_line(s: str) -> str:
+    """Texto limpio y compatible con Helvetica (latin-1)."""
+    t = clean_export_text(s)
+    return t.encode("latin-1", errors="replace").decode("latin-1")
 
 
 def db_path() -> Path:
@@ -177,11 +248,6 @@ def clear_chat(chat_id: int) -> int:
             conn.close()
 
 
-def _pdf_safe_line(s: str) -> str:
-    """Helvetica WinAnsi: preservar español típico vía Latin-1."""
-    return (s or "").encode("latin-1", errors="replace").decode("latin-1")
-
-
 def build_pdf(chat_id: int, *, chat_title: str | None = None) -> tuple[bytes, str]:
     """
     Genera PDF en memoria. Devuelve (bytes, nombre_archivo sugerido).
@@ -201,14 +267,15 @@ def build_pdf(chat_id: int, *, chat_title: str | None = None) -> tuple[bytes, st
     pdf.set_auto_page_break(auto=True, margin=14)
     pdf.add_page()
     pdf.set_font("Helvetica", "B", 14)
-    pdf.cell(0, 10, _pdf_safe_line(f"Historial del chat {chat_id}"), ln=True)
+    pdf.cell(0, 10, _pdf_line(f"Historial del chat {chat_id}"), ln=True)
     pdf.set_font("Helvetica", "", 9)
     pdf.cell(
         0,
         6,
-        _pdf_safe_line(
+        _pdf_line(
             f"Generado en servidor (UTC). Lineas exportadas: {len(rows)}. "
-            "Incluye tus mensajes y las respuestas de texto del bot mientras estuvo activo."
+            "Incluye tus mensajes y las respuestas de texto del bot mientras estuvo activo. "
+            "Texto sin simbolos de formato Markdown."
         ),
         ln=True,
     )
@@ -227,7 +294,7 @@ def build_pdf(chat_id: int, *, chat_title: str | None = None) -> tuple[bytes, st
         head = " · ".join(who_parts) if who_parts else "?"
         line = f"[{r.get('created_at','')}] ({head})"
         body = str(r.get("body", ""))
-        block = _pdf_safe_line(line) + "\n" + _pdf_safe_line(body)
+        block = _pdf_line(line) + "\n" + _pdf_line(body)
         pdf.multi_cell(0, 5, block)
         pdf.ln(2)
 
@@ -248,6 +315,7 @@ def build_txt(chat_id: int, *, chat_title: str | None = None) -> tuple[bytes, st
     lines_out: list[str] = []
     for r in rows:
         who = f"{r.get('user_id')} @{r.get('username') or ''} {r.get('display_name') or ''}".strip()
-        lines_out.append(f"[{r.get('created_at','')}] ({who})\n{r.get('body','')}\n")
+        b = clean_export_text(str(r.get("body", "")))
+        lines_out.append(f"[{r.get('created_at','')}] ({who})\n{b}\n")
     data = "\n".join(lines_out).encode("utf-8")
     return data, fname
