@@ -1057,13 +1057,12 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
         parse_mode="MarkdownV2",
     )
 
-    # Consultar CNE, IVSS, INTT y SENIAT en paralelo
+    # Consultar CNE, IVSS e INTT en paralelo (respuesta principal rápida)
     loop = asyncio.get_event_loop()
-    result_cedula, result_ivss, result_intt, result_seniat = await asyncio.gather(
+    result_cedula, result_ivss, result_intt = await asyncio.gather(
         loop.run_in_executor(None, consultar_cedula, cedula, nacionalidad),
         loop.run_in_executor(None, consultar_ivss, cedula, nacionalidad),
         loop.run_in_executor(None, consultar_intt, cedula, nacionalidad),
-        loop.run_in_executor(None, consultar_seniat, cedula, nacionalidad),
     )
 
     # ── Bloque 1: Cédula / CNE ─────────────────────────────────────────
@@ -1110,14 +1109,23 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
         logger.error(f"Error enviando mensaje INTT: {e}")
         await update.message.reply_text("❌ *🚗 INTT:* El mensaje contiene caracteres no compatibles o hubo un fallo al enviarlo\\.", parse_mode="MarkdownV2")
 
-    # ── Bloque 4: SENIAT ───────────────────────────────────────────────
+    # ── Bloque 4: SENIAT (con tope de espera para no congelar /consultar) ──
     try:
+        result_seniat = await asyncio.wait_for(
+            loop.run_in_executor(None, consultar_seniat, cedula, nacionalidad),
+            timeout=35,
+        )
         if result_seniat.get("error"):
             error_seniat = result_seniat.get("error_str", "Error desconocido.")
             await update.message.reply_text(f"⚠️ 🧾 SENIAT: {error_seniat}")
         else:
             txt_seniat = formatear_respuesta_seniat(result_seniat.get("data", {}), nacionalidad, cedula)
             await update.message.reply_text(txt_seniat)
+    except asyncio.TimeoutError:
+        await update.message.reply_text(
+            "⚠️ 🧾 SENIAT: consulta omitida por tiempo de espera. "
+            "Usa /seniat para intentar de nuevo."
+        )
     except Exception as e:
         logger.error(f"Error enviando mensaje SENIAT: {e}")
         await update.message.reply_text(f"❌ 🧾 SENIAT: fallo al enviar respuesta ({e}).")
