@@ -13,6 +13,7 @@ import re
 import json
 import asyncio
 import logging
+import time
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
@@ -558,67 +559,82 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
 
     personalidad_map = {"V": "1", "E": "2", "J": "3", "P": "4", "G": "5"}
     personalidad = personalidad_map.get((nacionalidad or "V").upper(), "1")
-    session = requests.Session()
-    headers = {"User-Agent": "Mozilla/5.0"}
+    max_reintentos = 3
+    ultimo_error: str | None = None
 
-    try:
-        inicio = session.get(SENIAT_URL, headers=headers, timeout=20)
-        inicio.raise_for_status()
-        inicio.encoding = "windows-1252"
+    for intento in range(1, max_reintentos + 1):
+        session = requests.Session()
+        headers = {"User-Agent": "Mozilla/5.0"}
+        try:
+            inicio = session.get(SENIAT_URL, headers=headers, timeout=30)
+            inicio.raise_for_status()
+            inicio.encoding = "windows-1252"
 
-        payload = {
-            "contexto": "/relacionesrif",
-            "personalidad": personalidad,
-            "ci": cedula,
-        }
-        resp = session.post(
-            "http://contribuyente.seniat.gob.ve/relacionesrif/inicioConsulta.do",
-            data=payload,
-            headers={"User-Agent": "Mozilla/5.0", "Referer": SENIAT_URL},
-            timeout=25,
-        )
-        resp.raise_for_status()
-        resp.encoding = "windows-1252"
-
-        soup = BeautifulSoup(resp.text, "html.parser")
-        plain = " ".join(soup.stripped_strings)
-
-        if "Rif Errado" in plain:
-            return {
-                "error": True,
-                "error_str": (
-                    "Identificación inválida para SENIAT (RIF errado). "
-                    "Verifica prefijo (V/E/J/G) y número."
-                ),
+            payload = {
+                "contexto": "/relacionesrif",
+                "personalidad": personalidad,
+                "ci": cedula,
             }
+            resp = session.post(
+                "http://contribuyente.seniat.gob.ve/relacionesrif/inicioConsulta.do",
+                data=payload,
+                headers={"User-Agent": "Mozilla/5.0", "Referer": SENIAT_URL},
+                timeout=35,
+            )
+            resp.raise_for_status()
+            resp.encoding = "windows-1252"
 
-        if "No se encontraron Contribuyentes Relacionados" in plain:
-            relacion = "No posee relación"
-        else:
-            relacion = "Posee relación"
+            soup = BeautifulSoup(resp.text, "html.parser")
+            plain = " ".join(soup.stripped_strings)
 
-        id_match = re.search(r"Cédula o Rif:\s*([VEJPG]-\d{5,9}-\d)", plain, re.IGNORECASE)
-        nom_match = re.search(r"Nombre:\s*([A-ZÁÉÍÓÚÑ,\s]+?)\s+(No posee relación|Posee relación)", plain, re.IGNORECASE)
+            if "Rif Errado" in plain:
+                return {
+                    "error": True,
+                    "error_str": (
+                        "Identificación inválida para SENIAT (RIF errado). "
+                        "Verifica prefijo (V/E/J/G) y número."
+                    ),
+                }
 
-        if not id_match and not nom_match:
-            if "mensajeError" in resp.text or "error" in plain.lower():
-                return {"error": True, "error_str": "SENIAT devolvió un error en la consulta."}
-            return {"error": True, "error_str": "No se pudo interpretar la respuesta de SENIAT."}
+            if "No se encontraron Contribuyentes Relacionados" in plain:
+                relacion = "No posee relación"
+            else:
+                relacion = "Posee relación"
 
-        return {
-            "error": False,
-            "data": {
-                "rif": id_match.group(1).upper() if id_match else f"{nacionalidad}-{cedula}",
-                "nombre": " ".join((nom_match.group(1) if nom_match else "No disponible").split()),
-                "relacion": relacion,
-            },
-        }
-    except requests.exceptions.Timeout:
-        return {"error": True, "error_str": "SENIAT tardó demasiado en responder."}
-    except requests.exceptions.ConnectionError:
-        return {"error": True, "error_str": "No se pudo conectar al servidor de SENIAT."}
-    except Exception as e:
-        return {"error": True, "error_str": f"Error inesperado en SENIAT: {str(e)}"}
+            id_match = re.search(r"Cédula o Rif:\s*([VEJPG]-\d{5,9}-\d)", plain, re.IGNORECASE)
+            nom_match = re.search(r"Nombre:\s*([A-ZÁÉÍÓÚÑ,\s]+?)\s+(No posee relación|Posee relación)", plain, re.IGNORECASE)
+
+            if not id_match and not nom_match:
+                if "mensajeError" in resp.text or "error" in plain.lower():
+                    return {"error": True, "error_str": "SENIAT devolvió un error en la consulta."}
+                return {"error": True, "error_str": "No se pudo interpretar la respuesta de SENIAT."}
+
+            return {
+                "error": False,
+                "data": {
+                    "rif": id_match.group(1).upper() if id_match else f"{nacionalidad}-{cedula}",
+                    "nombre": " ".join((nom_match.group(1) if nom_match else "No disponible").split()),
+                    "relacion": relacion,
+                },
+            }
+        except requests.exceptions.Timeout:
+            ultimo_error = "timeout"
+            if intento < max_reintentos:
+                time.sleep(intento)
+                continue
+        except requests.exceptions.ConnectionError:
+            ultimo_error = "conexion"
+            if intento < max_reintentos:
+                time.sleep(intento)
+                continue
+        except Exception as e:
+            return {"error": True, "error_str": f"Error inesperado en SENIAT: {str(e)}"}
+
+    if ultimo_error == "timeout":
+        return {"error": True, "error_str": "SENIAT tardó demasiado en responder (se reintentó 3 veces)."}
+    if ultimo_error == "conexion":
+        return {"error": True, "error_str": "No se pudo conectar al servidor de SENIAT (se reintentó 3 veces)."}
+    return {"error": True, "error_str": "No fue posible completar la consulta SENIAT."}
 
 
 def formatear_respuesta_seniat(data: dict, nac: str, ced: str) -> str:
