@@ -1028,6 +1028,35 @@ async def recibir_cedula(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     return ConversationHandler.END
 
 
+async def _enviar_seniat_diferido(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    nacionalidad: str,
+    cedula: str,
+) -> None:
+    """Ejecuta SENIAT en segundo plano y envía el resultado cuando esté listo."""
+    loop = asyncio.get_event_loop()
+    try:
+        result_seniat = await asyncio.wait_for(
+            loop.run_in_executor(None, consultar_seniat, cedula, nacionalidad),
+            timeout=120,
+        )
+        if result_seniat.get("error"):
+            error_seniat = result_seniat.get("error_str", "Error desconocido.")
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ 🧾 SENIAT: {error_seniat}")
+        else:
+            txt_seniat = formatear_respuesta_seniat(result_seniat.get("data", {}), nacionalidad, cedula)
+            await context.bot.send_message(chat_id=chat_id, text=txt_seniat)
+    except asyncio.TimeoutError:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="⚠️ 🧾 SENIAT: sin respuesta en este momento. Intenta luego con /seniat.",
+        )
+    except Exception as e:
+        logger.error("Error en SENIAT diferido: %s", e, exc_info=True)
+        await context.bot.send_message(chat_id=chat_id, text=f"❌ 🧾 SENIAT: fallo interno ({e}).")
+
+
 async def procesar_cedula_raw(update, context, raw: str) -> None:
     # Detectar prefijo V/E
     if raw.startswith("V") and raw[1:].isdigit():
@@ -1109,26 +1138,16 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
         logger.error(f"Error enviando mensaje INTT: {e}")
         await update.message.reply_text("❌ *🚗 INTT:* El mensaje contiene caracteres no compatibles o hubo un fallo al enviarlo\\.", parse_mode="MarkdownV2")
 
-    # ── Bloque 4: SENIAT (con tope de espera para no congelar /consultar) ──
-    try:
-        result_seniat = await asyncio.wait_for(
-            loop.run_in_executor(None, consultar_seniat, cedula, nacionalidad),
-            timeout=35,
-        )
-        if result_seniat.get("error"):
-            error_seniat = result_seniat.get("error_str", "Error desconocido.")
-            await update.message.reply_text(f"⚠️ 🧾 SENIAT: {error_seniat}")
-        else:
-            txt_seniat = formatear_respuesta_seniat(result_seniat.get("data", {}), nacionalidad, cedula)
-            await update.message.reply_text(txt_seniat)
-    except asyncio.TimeoutError:
+    # ── Bloque 4: SENIAT en segundo plano (no bloquea /consultar) ───────────
+    chat_id = update.effective_chat.id if update.effective_chat else None
+    if chat_id is not None:
         await update.message.reply_text(
-            "⚠️ 🧾 SENIAT: consulta omitida por tiempo de espera. "
-            "Usa /seniat para intentar de nuevo."
+            "🧾 SENIAT sigue procesando en segundo plano\\. Te envío el resultado en este chat cuando termine\\.",
+            parse_mode="MarkdownV2",
         )
-    except Exception as e:
-        logger.error(f"Error enviando mensaje SENIAT: {e}")
-        await update.message.reply_text(f"❌ 🧾 SENIAT: fallo al enviar respuesta ({e}).")
+        asyncio.create_task(_enviar_seniat_diferido(context, chat_id, nacionalidad, cedula))
+    else:
+        await update.message.reply_text("⚠️ 🧾 SENIAT: no se pudo determinar el chat para respuesta diferida.")
 
     logger.info("Consulta completa: %s-%s", nacionalidad, cedula)
 
