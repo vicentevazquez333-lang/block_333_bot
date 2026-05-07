@@ -1587,12 +1587,7 @@ def main() -> None:
     uf = filters.User(user_id=list(allowed_ids)) if allowed_ids else filters.ALL
     deny = (~filters.User(user_id=list(allowed_ids))) if allowed_ids else None
 
-    app = (
-        Application.builder()
-        .token(TELEGRAM_TOKEN)
-        .bot(LoggingExtBot(token=TELEGRAM_TOKEN))
-        .build()
-    )
+    app = Application.builder().bot(LoggingExtBot(token=TELEGRAM_TOKEN)).build()
 
     try:
         import chat_export_sqlite
