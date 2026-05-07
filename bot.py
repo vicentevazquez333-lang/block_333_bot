@@ -534,7 +534,7 @@ def _parse_cedula_arg(raw: str) -> tuple[str | None, str | None]:
     value = (raw or "").strip().upper()
     if not value:
         return None, None
-    if value[0] in ("V", "E") and value[1:].isdigit():
+    if value[0] in ("V", "E", "J", "G", "P") and value[1:].isdigit():
         return value[0], value[1:]
     if value.isdigit():
         return "V", value
@@ -583,6 +583,15 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
         soup = BeautifulSoup(resp.text, "html.parser")
         plain = " ".join(soup.stripped_strings)
 
+        if "Rif Errado" in plain:
+            return {
+                "error": True,
+                "error_str": (
+                    "Identificación inválida para SENIAT (RIF errado). "
+                    "Verifica prefijo (V/E/J/G) y número."
+                ),
+            }
+
         if "No se encontraron Contribuyentes Relacionados" in plain:
             relacion = "No posee relación"
         else:
@@ -614,14 +623,14 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
 
 def formatear_respuesta_seniat(data: dict, nac: str, ced: str) -> str:
     lin = []
-    lin.append(escape_md("╔══════════════════════════╗"))
-    lin.append(escape_md("║  🧾  DATOS SENIAT        ║"))
-    lin.append(escape_md("╚══════════════════════════╝"))
+    lin.append("╔══════════════════════════╗")
+    lin.append("║  🧾  DATOS SENIAT        ║")
+    lin.append("╚══════════════════════════╝")
     lin.append("")
-    lin.append(f"🪪  *{escape_md('Cédula:')}*  `{escape_md(nac, True)}-{escape_md(ced, True)}`")
-    lin.append(f"🧾  *{escape_md('RIF:')}*     `{escape_md(data.get('rif', '—'), True)}`")
-    lin.append(f"👤  *{escape_md('Nombre:')}*  `{escape_md(data.get('nombre', '—'), True)}`")
-    lin.append(f"📌  *{escape_md('Relación:')}* `{escape_md(data.get('relacion', '—'), True)}`")
+    lin.append(f"🪪  Cédula:  {nac}-{ced}")
+    lin.append(f"🧾  RIF:     {data.get('rif', '—')}")
+    lin.append(f"👤  Nombre:  {data.get('nombre', '—')}")
+    lin.append(f"📌  Relación: {data.get('relacion', '—')}")
     return "\n".join(lin)
 
 
@@ -904,9 +913,10 @@ async def seniat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not args:
         await msg.reply_text(
             "Uso:\n"
-            "  /seniat <cedula>\n"
+            "  /seniat <identificacion>\n"
             "  /seniat V23775072\n"
             "  /seniat E1234567\n\n"
+            "También acepta J y G (ej: /seniat J123456789).\n"
             "Horario SENIAT: 09:00 a 20:59 (hora Venezuela)."
         )
         return
@@ -914,8 +924,8 @@ async def seniat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     nac, ced = _parse_cedula_arg(args[0])
     if not nac or not ced or not (5 <= len(ced) <= 9):
         await msg.reply_text(
-            "Formato inválido. Usa solo dígitos o prefijo V/E.\n"
-            "Ejemplo: /seniat 23775072 o /seniat V23775072"
+            "Formato inválido. Usa solo dígitos o prefijo V/E/J/G.\n"
+            "Ejemplos: /seniat 23775072 · /seniat V23775072 · /seniat J123456789"
         )
         return
 
@@ -926,7 +936,7 @@ async def seniat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     texto = formatear_respuesta_seniat(result.get("data", {}), nac, ced)
-    await wait.edit_text(texto, parse_mode="MarkdownV2")
+    await wait.edit_text(texto)
 
 
 async def consultar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1023,7 +1033,10 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
     # ── Bloque 2: IVSS ──────────────────────────────────────────────────
     if result_ivss.get("error"):
         error_ivss = result_ivss.get("error_str", "Error en IVSS.")
-        await update.message.reply_text(f"⚠️ *🏥 IVSS:* {error_ivss}", parse_mode="MarkdownV2")
+        await update.message.reply_text(
+            f"⚠️ *🏥 IVSS:* `{escape_md(error_ivss, True)}`",
+            parse_mode="MarkdownV2",
+        )
     else:
         await update.message.reply_text(
             formatear_respuesta_ivss(result_ivss.get("data", {}), nacionalidad, cedula),
@@ -1034,7 +1047,10 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
     try:
         if result_intt.get("error"):
             error_intt = result_intt.get("error_str", "Error desconocido.")
-            await update.message.reply_text(f"⚠️ *🚗 INTT:* {error_intt}", parse_mode="MarkdownV2")
+            await update.message.reply_text(
+                f"⚠️ *🚗 INTT:* `{escape_md(error_intt, True)}`",
+                parse_mode="MarkdownV2",
+            )
         else:
             txt_intt = formatear_respuesta_intt(result_intt, nacionalidad, cedula)
             await update.message.reply_text(txt_intt, parse_mode="MarkdownV2")
@@ -1046,13 +1062,13 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
     try:
         if result_seniat.get("error"):
             error_seniat = result_seniat.get("error_str", "Error desconocido.")
-            await update.message.reply_text(f"⚠️ *🧾 SENIAT:* {error_seniat}", parse_mode="MarkdownV2")
+            await update.message.reply_text(f"⚠️ 🧾 SENIAT: {error_seniat}")
         else:
             txt_seniat = formatear_respuesta_seniat(result_seniat.get("data", {}), nacionalidad, cedula)
-            await update.message.reply_text(txt_seniat, parse_mode="MarkdownV2")
+            await update.message.reply_text(txt_seniat)
     except Exception as e:
         logger.error(f"Error enviando mensaje SENIAT: {e}")
-        await update.message.reply_text("❌ *🧾 SENIAT:* Ocurrió un fallo al enviar la respuesta\\.", parse_mode="MarkdownV2")
+        await update.message.reply_text(f"❌ 🧾 SENIAT: fallo al enviar respuesta ({e}).")
 
     logger.info("Consulta completa: %s-%s", nacionalidad, cedula)
 
