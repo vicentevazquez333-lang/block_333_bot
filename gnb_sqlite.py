@@ -23,8 +23,38 @@ from typing import Any
 
 _download_lock = threading.Lock()
 
+_SQLITE_MAGIC = b"SQLite format 3"
+
 _PROJECT_ROOT = Path(__file__).resolve().parent
 _DEFAULT_DB = _PROJECT_ROOT / "BASE DE DATOS" / "gnb.sqlite"
+
+
+def _raise_bad_github_release_url() -> None:
+    raise FileNotFoundError(
+        "GNB_DOWNLOAD_URL no debe ser la página del release (/releases/tag/…).\n"
+        "Usa el enlace directo al archivo .sqlite (/releases/download/…/gnb.sqlite).\n"
+        "Ejemplo:\n"
+        "https://github.com/vicentevazquez333-lang/block_333_bot/releases/download/GNB-1/gnb.sqlite"
+    )
+
+
+def _assert_sqlite_file(path: Path) -> None:
+    """Comprueba cabecera SQLite; si no, borra el archivo y avisa (p. ej. se descargó HTML)."""
+    try:
+        with open(path, "rb") as f:
+            hdr = f.read(len(_SQLITE_MAGIC))
+    except OSError:
+        return
+    if hdr == _SQLITE_MAGIC:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    raise FileNotFoundError(
+        "El archivo en GNB_DB no es un SQLite válido (suele pasar si la URL descargó "
+        "una página HTML en lugar del .sqlite). Corrige GNB_DOWNLOAD_URL y vuelve a intentar."
+    )
 
 
 def db_path() -> Path:
@@ -33,6 +63,8 @@ def db_path() -> Path:
 
 
 def _download_gnb_db(url: str, dest: Path) -> None:
+    if "/releases/tag/" in url:
+        _raise_bad_github_release_url()
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(dest.name + ".part")
     if part.exists():
@@ -52,6 +84,7 @@ def _download_gnb_db(url: str, dest: Path) -> None:
                 if not chunk:
                     break
                 out.write(chunk)
+        _assert_sqlite_file(part)
         part.replace(dest)
     except Exception:
         if part.exists():
@@ -62,10 +95,13 @@ def _download_gnb_db(url: str, dest: Path) -> None:
 def ensure_gnb_database() -> None:
     path = db_path()
     if path.is_file():
+        _assert_sqlite_file(path)
         return
     url = os.environ.get("GNB_DOWNLOAD_URL", "").strip()
     if not url:
         return
+    if "/releases/tag/" in url:
+        _raise_bad_github_release_url()
     with _download_lock:
         if path.is_file():
             return

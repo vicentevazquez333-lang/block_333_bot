@@ -22,6 +22,34 @@ from typing import Any
 
 _download_lock = threading.Lock()
 
+_SQLITE_MAGIC = b"SQLite format 3"
+
+
+def _raise_bad_github_release_url_digitel() -> None:
+    raise FileNotFoundError(
+        "DIGITEL_DOWNLOAD_URL no debe ser /releases/tag/… (página HTML).\n"
+        "Usa: …/releases/download/TAG_ARCHIVO/digitel.sqlite"
+    )
+
+
+def _assert_sqlite_file_digitel(path: Path) -> None:
+    try:
+        with open(path, "rb") as f:
+            hdr = f.read(len(_SQLITE_MAGIC))
+    except OSError:
+        return
+    if hdr == _SQLITE_MAGIC:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    raise FileNotFoundError(
+        "El archivo en DIGITEL_DB no es SQLite válido (URL incorrecta o HTML descargado). "
+        "Corrige DIGITEL_DOWNLOAD_URL."
+    )
+
+
 # Raíz del proyecto (directorio donde está este archivo)
 _PROJECT_ROOT = Path(__file__).resolve().parent
 _DEFAULT_DB = _PROJECT_ROOT / "BASE DE DATOS" / "digitel.sqlite"
@@ -33,6 +61,8 @@ def db_path() -> Path:
 
 
 def _download_digitel_db(url: str, dest: Path) -> None:
+    if "/releases/tag/" in url:
+        _raise_bad_github_release_url_digitel()
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_name(dest.name + ".part")
     if part.exists():
@@ -53,6 +83,7 @@ def _download_digitel_db(url: str, dest: Path) -> None:
                 if not chunk:
                     break
                 out.write(chunk)
+        _assert_sqlite_file_digitel(part)
         part.replace(dest)
     except Exception:
         if part.exists():
@@ -67,10 +98,13 @@ def ensure_digitel_database() -> None:
     """
     path = db_path()
     if path.is_file():
+        _assert_sqlite_file_digitel(path)
         return
     url = os.environ.get("DIGITEL_DOWNLOAD_URL", "").strip()
     if not url:
         return
+    if "/releases/tag/" in url:
+        _raise_bad_github_release_url_digitel()
     with _download_lock:
         if path.is_file():
             return

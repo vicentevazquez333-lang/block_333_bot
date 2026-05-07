@@ -13,6 +13,7 @@ import re
 import json
 import asyncio
 import logging
+from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 
@@ -62,6 +63,7 @@ INTT_BASE_URL  = "http://consulta.intt.gob.ve"
 INTT_LOGIN_URL = f"{INTT_BASE_URL}/ingreso"
 INTT_UPDATE_URL = f"{INTT_BASE_URL}/livewire/update"
 INTT_VEH_URL   = f"{INTT_BASE_URL}/consulta-vehiculos"
+SENIAT_URL     = "http://contribuyente.seniat.gob.ve/relacionesrif/inicioConsulta.jsp"
 
 INTT_USER      = os.environ.get("INTT_USER", "Ee30743649@gmail.com")
 INTT_PASS      = os.environ.get("INTT_PASS", "30743649Ee.")
@@ -147,6 +149,16 @@ async def access_denied_reply(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ─────────────────────────────────────────────
 #  Consulta a la API de cedula.com.ve
 # ─────────────────────────────────────────────
+_CEDULA_API_ERR_MSG = {
+    "INVALID_TOKEN": (
+        "Token o App ID inválidos o caducados. Genera un token nuevo en "
+        "https://cedula.com.ve/web/login.php y actualiza API_TOKEN y API_APP_ID "
+        "en Render (o en tu .env)."
+    ),
+    "INVALID_APP": "App ID no reconocido. Revisa API_APP_ID en las variables de entorno.",
+}
+
+
 def consultar_cedula(cedula: str, nacionalidad: str = "V") -> dict:
     params = {
         "app_id":       API_APP_ID,
@@ -157,7 +169,12 @@ def consultar_cedula(cedula: str, nacionalidad: str = "V") -> dict:
     try:
         resp = requests.get(API_URL, params=params, timeout=15)
         resp.raise_for_status()
-        return resp.json()
+        data = resp.json()
+        if isinstance(data, dict) and data.get("error"):
+            code = (data.get("error_str") or "").strip()
+            if code in _CEDULA_API_ERR_MSG:
+                data = {**data, "error_str": _CEDULA_API_ERR_MSG[code]}
+        return data
     except requests.exceptions.Timeout:
         return {"error": True, "error_str": "⏱️ Tiempo de espera agotado. Intenta de nuevo."}
     except requests.exceptions.ConnectionError:
@@ -513,6 +530,101 @@ def formatear_respuesta_ivss(data: dict, nac: str, ced: str) -> str:
     return "\n".join(lin)
 
 
+def _parse_cedula_arg(raw: str) -> tuple[str | None, str | None]:
+    value = (raw or "").strip().upper()
+    if not value:
+        return None, None
+    if value[0] in ("V", "E") and value[1:].isdigit():
+        return value[0], value[1:]
+    if value.isdigit():
+        return "V", value
+    return None, None
+
+
+def _seniat_horario_abierto() -> bool:
+    # SENIAT publica ventana diaria de consulta entre 09:00 y 20:59 (hora VE).
+    ve_now = datetime.utcnow()
+    hora_ve = (ve_now.hour - 4) % 24
+    minutos_ve = hora_ve * 60 + ve_now.minute
+    return 9 * 60 <= minutos_ve <= (20 * 60 + 59)
+
+
+def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
+    if not _seniat_horario_abierto():
+        return {
+            "error": True,
+            "error_str": "Consulta SENIAT disponible de 09:00 a 20:59 (hora Venezuela).",
+        }
+
+    personalidad_map = {"V": "1", "E": "2", "J": "3", "P": "4", "G": "5"}
+    personalidad = personalidad_map.get((nacionalidad or "V").upper(), "1")
+    session = requests.Session()
+    headers = {"User-Agent": "Mozilla/5.0"}
+
+    try:
+        inicio = session.get(SENIAT_URL, headers=headers, timeout=20)
+        inicio.raise_for_status()
+        inicio.encoding = "windows-1252"
+
+        payload = {
+            "contexto": "/relacionesrif",
+            "personalidad": personalidad,
+            "ci": cedula,
+        }
+        resp = session.post(
+            "http://contribuyente.seniat.gob.ve/relacionesrif/inicioConsulta.do",
+            data=payload,
+            headers={"User-Agent": "Mozilla/5.0", "Referer": SENIAT_URL},
+            timeout=25,
+        )
+        resp.raise_for_status()
+        resp.encoding = "windows-1252"
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+        plain = " ".join(soup.stripped_strings)
+
+        if "No se encontraron Contribuyentes Relacionados" in plain:
+            relacion = "No posee relación"
+        else:
+            relacion = "Posee relación"
+
+        id_match = re.search(r"Cédula o Rif:\s*([VEJPG]-\d{5,9}-\d)", plain, re.IGNORECASE)
+        nom_match = re.search(r"Nombre:\s*([A-ZÁÉÍÓÚÑ,\s]+?)\s+(No posee relación|Posee relación)", plain, re.IGNORECASE)
+
+        if not id_match and not nom_match:
+            if "mensajeError" in resp.text or "error" in plain.lower():
+                return {"error": True, "error_str": "SENIAT devolvió un error en la consulta."}
+            return {"error": True, "error_str": "No se pudo interpretar la respuesta de SENIAT."}
+
+        return {
+            "error": False,
+            "data": {
+                "rif": id_match.group(1).upper() if id_match else f"{nacionalidad}-{cedula}",
+                "nombre": " ".join((nom_match.group(1) if nom_match else "No disponible").split()),
+                "relacion": relacion,
+            },
+        }
+    except requests.exceptions.Timeout:
+        return {"error": True, "error_str": "SENIAT tardó demasiado en responder."}
+    except requests.exceptions.ConnectionError:
+        return {"error": True, "error_str": "No se pudo conectar al servidor de SENIAT."}
+    except Exception as e:
+        return {"error": True, "error_str": f"Error inesperado en SENIAT: {str(e)}"}
+
+
+def formatear_respuesta_seniat(data: dict, nac: str, ced: str) -> str:
+    lin = []
+    lin.append(escape_md("╔══════════════════════════╗"))
+    lin.append(escape_md("║  🧾  DATOS SENIAT        ║"))
+    lin.append(escape_md("╚══════════════════════════╝"))
+    lin.append("")
+    lin.append(f"🪪  *{escape_md('Cédula:')}*  `{escape_md(nac, True)}-{escape_md(ced, True)}`")
+    lin.append(f"🧾  *{escape_md('RIF:')}*     `{escape_md(data.get('rif', '—'), True)}`")
+    lin.append(f"👤  *{escape_md('Nombre:')}*  `{escape_md(data.get('nombre', '—'), True)}`")
+    lin.append(f"📌  *{escape_md('Relación:')}* `{escape_md(data.get('relacion', '—'), True)}`")
+    return "\n".join(lin)
+
+
 # ─────────────────────────────────────────────
 #  Handlers
 # ─────────────────────────────────────────────
@@ -531,6 +643,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  /consultar — Iniciar una consulta\n"
         "  /digitel    — Buscar en base Digitel \\(tel / documento\\)\n"
         "  /gnb        — Buscar en base GNB \\(cédula o nombre\\)\n"
+        "  /seniat     — Consultar datos en SENIAT \\(09:00–20:59 VE\\)\n"
         "  /help       — Ayuda\n"
         "  /start      — Volver al inicio\n\n"
         "O simplemente envíame un número de cédula directamente 👇"
@@ -548,7 +661,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "   `/consultar 23775072`\n\n"
         "Para cédulas extranjeras agrega la letra E:\n"
         "   `/consultar E1234567`\n\n"
-        "📡 Digitel: `/digitel` · GNB: `/gnb` \\(ver /start\\)\n\n"
+        "📡 Digitel: `/digitel` · GNB: `/gnb` · SENIAT: `/seniat`\n\n"
         "ℹ️ Datos que obtienes:\n"
         "  • Nombre completo\n"
         "  • R\\.I\\.F\\.\n"
@@ -780,6 +893,42 @@ async def gnb_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await msg.reply_text(texto)
 
 
+async def seniat_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    if not msg:
+        return
+    if not await ensure_user_allowed(update):
+        return
+
+    args = list(context.args or [])
+    if not args:
+        await msg.reply_text(
+            "Uso:\n"
+            "  /seniat <cedula>\n"
+            "  /seniat V23775072\n"
+            "  /seniat E1234567\n\n"
+            "Horario SENIAT: 09:00 a 20:59 (hora Venezuela)."
+        )
+        return
+
+    nac, ced = _parse_cedula_arg(args[0])
+    if not nac or not ced or not (5 <= len(ced) <= 9):
+        await msg.reply_text(
+            "Formato inválido. Usa solo dígitos o prefijo V/E.\n"
+            "Ejemplo: /seniat 23775072 o /seniat V23775072"
+        )
+        return
+
+    wait = await msg.reply_text("🧾 Consultando SENIAT…")
+    result = await asyncio.to_thread(consultar_seniat, ced, nac)
+    if result.get("error"):
+        await wait.edit_text(f"❌ SENIAT: {result.get('error_str', 'Error desconocido.')}")
+        return
+
+    texto = formatear_respuesta_seniat(result.get("data", {}), nac, ced)
+    await wait.edit_text(texto, parse_mode="MarkdownV2")
+
+
 async def consultar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         raw = context.args[0].strip().upper()
@@ -842,22 +991,23 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
         return
 
     msg = await update.message.reply_text(
-        "🔍 Consultando *múltiples fuentes* en paralelo\\.\\.\\. un momento ⏳",
+        "🔍 Consultando *🗳️ CNE · 🏥 IVSS · 🚗 INTT · 🧾 SENIAT* en paralelo\\.\\.\\. un momento ⏳",
         parse_mode="MarkdownV2",
     )
 
-    # Consultar CNE, IVSS e INTT en paralelo
+    # Consultar CNE, IVSS, INTT y SENIAT en paralelo
     loop = asyncio.get_event_loop()
-    result_cedula, result_ivss, result_intt = await asyncio.gather(
+    result_cedula, result_ivss, result_intt, result_seniat = await asyncio.gather(
         loop.run_in_executor(None, consultar_cedula, cedula, nacionalidad),
         loop.run_in_executor(None, consultar_ivss, cedula, nacionalidad),
         loop.run_in_executor(None, consultar_intt, cedula, nacionalidad),
+        loop.run_in_executor(None, consultar_seniat, cedula, nacionalidad),
     )
 
     # ── Bloque 1: Cédula / CNE ─────────────────────────────────────────
     if result_cedula.get("error"):
         error = result_cedula.get("error_str", "Error desconocido.")
-        await msg.edit_text(f"❌ *CNE:* `{error}`", parse_mode="MarkdownV2")
+        await msg.edit_text(f"❌ *🗳️ CNE:* `{error}`", parse_mode="MarkdownV2")
     else:
         data_cedula = result_cedula.get("data", {})
         if data_cedula:
@@ -873,7 +1023,7 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
     # ── Bloque 2: IVSS ──────────────────────────────────────────────────
     if result_ivss.get("error"):
         error_ivss = result_ivss.get("error_str", "Error en IVSS.")
-        await update.message.reply_text(f"⚠️ *IVSS:* {error_ivss}", parse_mode="MarkdownV2")
+        await update.message.reply_text(f"⚠️ *🏥 IVSS:* {error_ivss}", parse_mode="MarkdownV2")
     else:
         await update.message.reply_text(
             formatear_respuesta_ivss(result_ivss.get("data", {}), nacionalidad, cedula),
@@ -884,13 +1034,25 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
     try:
         if result_intt.get("error"):
             error_intt = result_intt.get("error_str", "Error desconocido.")
-            await update.message.reply_text(f"⚠️ *INTT:* {error_intt}", parse_mode="MarkdownV2")
+            await update.message.reply_text(f"⚠️ *🚗 INTT:* {error_intt}", parse_mode="MarkdownV2")
         else:
             txt_intt = formatear_respuesta_intt(result_intt, nacionalidad, cedula)
             await update.message.reply_text(txt_intt, parse_mode="MarkdownV2")
     except Exception as e:
         logger.error(f"Error enviando mensaje INTT: {e}")
-        await update.message.reply_text("❌ *INTT:* El mensaje contiene caracteres no compatibles o hubo un fallo al enviarlo\\.", parse_mode="MarkdownV2")
+        await update.message.reply_text("❌ *🚗 INTT:* El mensaje contiene caracteres no compatibles o hubo un fallo al enviarlo\\.", parse_mode="MarkdownV2")
+
+    # ── Bloque 4: SENIAT ───────────────────────────────────────────────
+    try:
+        if result_seniat.get("error"):
+            error_seniat = result_seniat.get("error_str", "Error desconocido.")
+            await update.message.reply_text(f"⚠️ *🧾 SENIAT:* {error_seniat}", parse_mode="MarkdownV2")
+        else:
+            txt_seniat = formatear_respuesta_seniat(result_seniat.get("data", {}), nacionalidad, cedula)
+            await update.message.reply_text(txt_seniat, parse_mode="MarkdownV2")
+    except Exception as e:
+        logger.error(f"Error enviando mensaje SENIAT: {e}")
+        await update.message.reply_text("❌ *🧾 SENIAT:* Ocurrió un fallo al enviar la respuesta\\.", parse_mode="MarkdownV2")
 
     logger.info("Consulta completa: %s-%s", nacionalidad, cedula)
 
@@ -970,6 +1132,7 @@ def main() -> None:
     app.add_handler(CommandHandler("help", help_command, filters=uf))
     app.add_handler(CommandHandler("digitel", digitel_command, filters=uf))
     app.add_handler(CommandHandler("gnb", gnb_command, filters=uf))
+    app.add_handler(CommandHandler("seniat", seniat_command, filters=uf))
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(nueva_consulta_callback, pattern="^NUEVA_CONSULTA$"))
     app.add_handler(MessageHandler((filters.TEXT & ~filters.COMMAND) & uf, mensaje_directo))
