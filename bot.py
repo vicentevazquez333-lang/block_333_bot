@@ -1034,7 +1034,7 @@ async def _enviar_seniat_diferido(
     nacionalidad: str,
     cedula: str,
 ) -> None:
-    """Ejecuta SENIAT en segundo plano y envía el resultado cuando esté listo."""
+    """Ejecuta SENIAT en segundo plano y envía solo resultados útiles."""
     loop = asyncio.get_event_loop()
     try:
         result_seniat = await asyncio.wait_for(
@@ -1043,18 +1043,18 @@ async def _enviar_seniat_diferido(
         )
         if result_seniat.get("error"):
             error_seniat = result_seniat.get("error_str", "Error desconocido.")
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ 🧾 SENIAT: {error_seniat}")
+            # En /consultar evitamos ruido cuando SENIAT está intermitente.
+            # Solo notificamos errores de validación útiles para el usuario.
+            if "RIF errado" in error_seniat or "Identificación inválida" in error_seniat:
+                await context.bot.send_message(chat_id=chat_id, text=f"⚠️ 🧾 SENIAT: {error_seniat}")
         else:
             txt_seniat = formatear_respuesta_seniat(result_seniat.get("data", {}), nacionalidad, cedula)
             await context.bot.send_message(chat_id=chat_id, text=txt_seniat)
     except asyncio.TimeoutError:
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="⚠️ 🧾 SENIAT: sin respuesta en este momento. Intenta luego con /seniat.",
-        )
+        logger.warning("SENIAT diferido sin respuesta a tiempo para %s-%s", nacionalidad, cedula)
     except Exception as e:
         logger.error("Error en SENIAT diferido: %s", e, exc_info=True)
-        await context.bot.send_message(chat_id=chat_id, text=f"❌ 🧾 SENIAT: fallo interno ({e}).")
+        # No enviamos error técnico al usuario en /consultar para no degradar UX.
 
 
 async def procesar_cedula_raw(update, context, raw: str) -> None:
@@ -1142,7 +1142,7 @@ async def procesar_cedula_raw(update, context, raw: str) -> None:
     chat_id = update.effective_chat.id if update.effective_chat else None
     if chat_id is not None:
         await update.message.reply_text(
-            "🧾 SENIAT sigue procesando en segundo plano\\. Te envío el resultado en este chat cuando termine\\.",
+            "🧾 SENIAT sigue procesando en segundo plano\\. Si responde, te envío el resultado en este chat\\.",
             parse_mode="MarkdownV2",
         )
         asyncio.create_task(_enviar_seniat_diferido(context, chat_id, nacionalidad, cedula))
