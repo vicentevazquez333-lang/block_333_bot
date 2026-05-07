@@ -38,6 +38,8 @@ from telegram.ext import (
     ConversationHandler,
 )
 
+from logging_ext_bot import LoggingExtBot
+
 # ════════════════════════════════════════════════════════
 #  CONFIGURACIÓN  (se lee de variables de entorno primero,
 #  y si no existen, usa los valores escritos aquí abajo)
@@ -1494,8 +1496,8 @@ async def exportar_chat_pdf_command(update: Update, context: ContextTypes.DEFAUL
         data, fname = await asyncio.to_thread(_pdf)
     except ValueError:
         await wait.edit_text(
-            "No hay mensajes guardados para este chat.\n\n"
-            "Solo se registran mensajes de texto mientras el bot está activo."
+            "No hay líneas guardadas para este chat.\n\n"
+            "Se registran tus mensajes y las respuestas de texto del bot mientras el servicio está activo."
         )
         return
     except Exception as e:
@@ -1504,8 +1506,8 @@ async def exportar_chat_pdf_command(update: Update, context: ContextTypes.DEFAUL
             data, fname = await asyncio.to_thread(_txt)
         except ValueError:
             await wait.edit_text(
-                "No hay mensajes guardados para este chat.\n\n"
-                "Solo se registran mensajes de texto mientras el bot está activo."
+                "No hay líneas guardadas para este chat.\n\n"
+                "Se registran tus mensajes y las respuestas de texto del bot mientras el servicio está activo."
             )
             return
         except Exception as e2:
@@ -1524,8 +1526,8 @@ async def exportar_chat_pdf_command(update: Update, context: ContextTypes.DEFAUL
 
     await wait.delete()
     cap = (
-        "Historial exportado (mensajes de texto registrados en el servidor). "
-        "No incluye conversaciones anteriores a usar el bot."
+        "Historial exportado (tu chat + respuestas de texto del bot). "
+        "No incluye mensajes anteriores a usar este bot."
     )
     if len(data) > 49 * 1024 * 1024:
         await msg.reply_text(
@@ -1585,7 +1587,12 @@ def main() -> None:
     uf = filters.User(user_id=list(allowed_ids)) if allowed_ids else filters.ALL
     deny = (~filters.User(user_id=list(allowed_ids))) if allowed_ids else None
 
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(TELEGRAM_TOKEN)
+        .bot(LoggingExtBot(token=TELEGRAM_TOKEN))
+        .build()
+    )
 
     try:
         import chat_export_sqlite

@@ -132,6 +132,25 @@ def append_line(
             conn.close()
 
 
+def append_bot_line(
+    chat_id: int, body: str, *, note: str | None = None, kind: str = "bot"
+) -> None:
+    """Registra texto enviado por el bot (respuestas a consultas, ayuda, etc.)."""
+    t = (body or "").strip()
+    if not t:
+        return
+    if note:
+        t = f"[{note}] {t}"
+    append_line(
+        chat_id=chat_id,
+        user_id=0,
+        username=None,
+        display_name="Bot",
+        body=t,
+        kind=kind,
+    )
+
+
 def fetch_lines(chat_id: int) -> list[dict[str, Any]]:
     with _LOCK:
         conn = _connect()
@@ -189,7 +208,7 @@ def build_pdf(chat_id: int, *, chat_title: str | None = None) -> tuple[bytes, st
         6,
         _pdf_safe_line(
             f"Generado en servidor (UTC). Lineas exportadas: {len(rows)}. "
-            "Solo incluye mensajes de texto registrados mientras el bot estaba activo."
+            "Incluye tus mensajes y las respuestas de texto del bot mientras estuvo activo."
         ),
         ln=True,
     )
