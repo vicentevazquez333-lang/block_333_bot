@@ -12,6 +12,7 @@ import os
 import re
 import json
 import asyncio
+from io import BytesIO
 import logging
 import time
 from datetime import datetime
@@ -707,6 +708,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  /cicpc      — Buscar en base CICPC \\(cédula o nombre\\)\n"
         "  /pnb        — Buscar en base PNB \\(cédula o nombre\\)\n"
         "  /seniat     — Consultar datos en SENIAT \\(09:00–20:59 VE\\)\n"
+        "  /exportar\\_chat — Descargar PDF del historial registrado\n"
+        "  /olvidar\\_historial — Borrar historial guardado en el servidor\n"
         "  /help       — Ayuda\n"
         "  /start      — Volver al inicio\n\n"
         "O simplemente envíame un número de cédula directamente 👇"
@@ -724,7 +727,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "   `/consultar 23775072`\n\n"
         "Para cédulas extranjeras agrega la letra E:\n"
         "   `/consultar E1234567`\n\n"
-        "📡 Digitel: `/digitel` · GNB: `/gnb` · CICPC: `/cicpc` · PNB: `/pnb` · SENIAT: `/seniat`\n\n"
+        "📡 Digitel: `/digitel` · GNB: `/gnb` · CICPC: `/cicpc` · PNB: `/pnb` · SENIAT: `/seniat`\n"
+        "📄 Historial: `/exportar\\_chat` · 🗑 `/olvidar\\_historial`\n\n"
         "ℹ️ Datos que obtienes:\n"
         "  • Nombre completo\n"
         "  • R\\.I\\.F\\.\n"
@@ -1427,6 +1431,127 @@ async def mensaje_directo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         )
 
 
+async def registrar_mensaje_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Guarda texto entrante (privados y grupos) para poder exportar PDF después."""
+    import chat_export_sqlite
+
+    if not user_has_access(update):
+        return
+    chat = update.effective_chat
+    user = update.effective_user
+    msg = update.effective_message
+    if chat is None or user is None or msg is None:
+        return
+    if user.is_bot:
+        return
+    if chat.type not in ("private", "group", "supergroup"):
+        return
+    text = msg.text or ""
+    if not text.strip():
+        return
+    disp = user.full_name or " ".join(
+        x for x in (user.first_name or "", user.last_name or "") if x
+    ).strip()
+    kind = "cmd" if text.strip().startswith("/") else "msg"
+    chat_export_sqlite.append_line(
+        chat_id=chat.id,
+        user_id=user.id,
+        username=user.username,
+        display_name=disp or None,
+        body=text,
+        kind=kind,
+    )
+
+
+async def exportar_chat_pdf_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Genera un PDF con los mensajes de texto registrados para este chat."""
+    import chat_export_sqlite
+
+    msg = update.effective_message
+    if not msg:
+        return
+    if not await ensure_user_allowed(update):
+        return
+    chat = update.effective_chat
+    if chat is None:
+        return
+    chat_id = chat.id
+    title = None
+    if chat.type in ("group", "supergroup"):
+        title = chat.title
+    elif update.effective_user:
+        title = update.effective_user.full_name or str(update.effective_user.id)
+
+    wait = await msg.reply_text("📄 Generando PDF del historial registrado…")
+
+    def _pdf() -> tuple[bytes, str]:
+        return chat_export_sqlite.build_pdf(chat_id, chat_title=title)
+
+    def _txt() -> tuple[bytes, str]:
+        return chat_export_sqlite.build_txt(chat_id, chat_title=title)
+
+    try:
+        data, fname = await asyncio.to_thread(_pdf)
+    except ValueError:
+        await wait.edit_text(
+            "No hay mensajes guardados para este chat.\n\n"
+            "Solo se registran mensajes de texto mientras el bot está activo."
+        )
+        return
+    except Exception as e:
+        logger.warning("Export PDF falló (%s), intento TXT: %s", type(e).__name__, e)
+        try:
+            data, fname = await asyncio.to_thread(_txt)
+        except ValueError:
+            await wait.edit_text(
+                "No hay mensajes guardados para este chat.\n\n"
+                "Solo se registran mensajes de texto mientras el bot está activo."
+            )
+            return
+        except Exception as e2:
+            logger.exception("Export TXT falló: %s", e2)
+            await wait.edit_text(
+                "❌ No se pudo generar el archivo. Revisa los logs del servidor."
+            )
+            return
+        await wait.delete()
+        await msg.reply_document(
+            document=BytesIO(data),
+            filename=fname,
+            caption="Historial en texto plano (fallback).",
+        )
+        return
+
+    await wait.delete()
+    cap = (
+        "Historial exportado (mensajes de texto registrados en el servidor). "
+        "No incluye conversaciones anteriores a usar el bot."
+    )
+    if len(data) > 49 * 1024 * 1024:
+        await msg.reply_text(
+            "❌ El archivo supera el límite de Telegram (~50 MB). "
+            "Borra parte del historial con /olvidar_historial o reduce CHAT_EXPORT_MAX_LINES."
+        )
+        return
+    await msg.reply_document(document=BytesIO(data), filename=fname, caption=cap)
+
+
+async def olvidar_historial_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    import chat_export_sqlite
+
+    msg = update.effective_message
+    if not msg:
+        return
+    if not await ensure_user_allowed(update):
+        return
+    chat = update.effective_chat
+    if chat is None:
+        return
+
+    n = await asyncio.to_thread(chat_export_sqlite.clear_chat, chat.id)
+    await msg.reply_text(f"🗑️ Se eliminaron {n} líneas del historial guardado en el servidor.")
+
+
 # ─────────────────────────────────────────────
 #  Main
 # ─────────────────────────────────────────────
@@ -1462,6 +1587,13 @@ def main() -> None:
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    try:
+        import chat_export_sqlite
+
+        chat_export_sqlite.init_db()
+    except Exception as e:
+        logger.warning("chat_export_sqlite.init_db: %s", e)
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("consultar", consultar_command, filters=uf)],
         states={
@@ -1480,9 +1612,12 @@ def main() -> None:
     app.add_handler(CommandHandler("cicpc", cicpc_command, filters=uf))
     app.add_handler(CommandHandler("pnb", pnb_command, filters=uf))
     app.add_handler(CommandHandler("seniat", seniat_command, filters=uf))
+    app.add_handler(CommandHandler("exportar_chat", exportar_chat_pdf_command, filters=uf))
+    app.add_handler(CommandHandler("olvidar_historial", olvidar_historial_command, filters=uf))
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(nueva_consulta_callback, pattern="^NUEVA_CONSULTA$"))
     app.add_handler(MessageHandler((filters.TEXT & ~filters.COMMAND) & uf, mensaje_directo))
+    app.add_handler(MessageHandler(filters.TEXT & uf, registrar_mensaje_chat), group=-1)
     if deny is not None:
         app.add_handler(MessageHandler(filters.COMMAND & deny, access_denied_reply))
         app.add_handler(

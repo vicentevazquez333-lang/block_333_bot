@@ -21,6 +21,7 @@ env/
 BASE DE DATOS/digitel.sqlite
 BASE DE DATOS/gnb.sqlite
 BASE DE DATOS/DIGITEL.TXT
+BASE DE DATOS/chat_log.sqlite
 
 # Logs
 *.log
