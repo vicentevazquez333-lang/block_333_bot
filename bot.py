@@ -704,6 +704,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "  /consultar — Iniciar una consulta\n"
         "  /digitel    — Buscar en base Digitel \\(tel / documento\\)\n"
         "  /gnb        — Buscar en base GNB \\(cédula o nombre\\)\n"
+        "  /cicpc      — Buscar en base CICPC \\(cédula o nombre\\)\n"
         "  /seniat     — Consultar datos en SENIAT \\(09:00–20:59 VE\\)\n"
         "  /help       — Ayuda\n"
         "  /start      — Volver al inicio\n\n"
@@ -722,7 +723,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "   `/consultar 23775072`\n\n"
         "Para cédulas extranjeras agrega la letra E:\n"
         "   `/consultar E1234567`\n\n"
-        "📡 Digitel: `/digitel` · GNB: `/gnb` · SENIAT: `/seniat`\n\n"
+        "📡 Digitel: `/digitel` · GNB: `/gnb` · CICPC: `/cicpc` · SENIAT: `/seniat`\n\n"
         "ℹ️ Datos que obtienes:\n"
         "  • Nombre completo\n"
         "  • R\\.I\\.F\\.\n"
@@ -940,6 +941,132 @@ async def gnb_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     bloques: list[str] = ["📋 GNB"]
+    max_filas = 6 if mode == "n" else 3
+    for i, r in enumerate(rows[:max_filas], 1):
+        bloques.append(f"\n── #{i} ──\n{compactar_fila(r)}")
+    if len(rows) > max_filas:
+        bloques.append(f"\n… (+{len(rows) - max_filas} filas más)")
+    if trunc:
+        bloques.append("\n… (hay más coincidencias; muestra limitada)")
+
+    texto = "\n".join(bloques)
+    if len(texto) > 4000:
+        texto = texto[:3990] + "\n… (mensaje recortado)"
+    await msg.reply_text(texto)
+
+
+def _cicpc_parse_args(args: list[str]) -> tuple[str | None, str | None, bool]:
+    """
+    (modo, valor, necesita_ayuda). modo: 'c' cédula, 'n' fragmento nombre.
+    """
+    if not args:
+        return None, None, True
+    if len(args) == 1:
+        token = args[0].strip().upper()
+        if len(token) >= 2 and token[0] in ("V", "E") and token[1:].isdigit():
+            return "c", token, False
+        solo = "".join(c for c in token if c.isdigit())
+        if solo and 4 <= len(solo) <= 12:
+            return "c", solo, False
+        frag = args[0].strip()
+        if len(frag) >= 3:
+            return "n", frag, False
+        return None, None, True
+    head = args[0].lower()
+    rest = " ".join(args[1:]).strip()
+    if not rest:
+        return None, None, True
+    if head in ("c", "cedula", "ced"):
+        rest_up = rest.upper()
+        if len(rest_up) >= 2 and rest_up[0] in ("V", "E") and rest_up[1:].isdigit():
+            return "c", rest_up, False
+        dig = "".join(c for c in rest if c.isdigit())
+        return ("c", dig or rest, False) if (dig or rest).strip() else (None, None, True)
+    if head in ("n", "nombre", "a", "apellido", "apellidos"):
+        return "n", rest, False
+    return None, None, True
+
+
+async def cicpc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Consulta la base CICPC (SQLite): por cédula o por fragmento de nombre."""
+    from cicpc_sqlite import (
+        buscar_por_cedula,
+        buscar_por_documento,
+        buscar_por_nombre,
+        compactar_fila,
+        db_path,
+        ensure_cicpc_database,
+    )
+
+    msg = update.effective_message
+    if not msg:
+        return
+    if not await ensure_user_allowed(update):
+        return
+
+    args = list(context.args or [])
+    mode, valor, need_help = _cicpc_parse_args(args)
+    if need_help or not mode or not valor:
+        await msg.reply_text(
+            "Uso CICPC:\n"
+            "  /cicpc <cédula>      — ejemplo: /cicpc 17965814\n"
+            "  /cicpc V17965814     — cédula con nacionalidad\n"
+            "  /cicpc c <cédula>    — igual, solo dígitos\n"
+            "  /cicpc c E12345678   — modo cédula con prefijo\n"
+            "  /cicpc n <texto>     — buscar en nombre/apellido (mín. 3 letras)\n"
+            "  /cicpc nombre PUERTA — ejemplo por nombre\n\n"
+            "En Render: `CICPC_DB` y opcional `CICPC_DOWNLOAD_URL`."
+        )
+        return
+
+    try:
+        if not db_path().is_file():
+            await msg.reply_text(
+                "⏳ Descargando la base CICPC la primera vez "
+                "(puede tardar si el archivo es grande)…"
+            )
+        await asyncio.to_thread(ensure_cicpc_database)
+    except FileNotFoundError as e:
+        await msg.reply_text(f"❌ {e}")
+        return
+    except Exception as e:
+        logger.exception("CICPC: fallo al preparar la base: %s", e)
+        await msg.reply_text(
+            "❌ Error al preparar CICPC. Revisa CICPC_DOWNLOAD_URL / CICPC_DB en el servidor."
+        )
+        return
+
+    if not db_path().is_file():
+        await msg.reply_text(
+            "📂 No hay base CICPC.\n\n"
+            "• Local: `python import_cicpc_sqlite.py`\n"
+            "• Nube: `CICPC_DOWNLOAD_URL` + `CICPC_DB` (ej. `/tmp/cicpc.sqlite`)."
+        )
+        return
+
+    try:
+        if mode == "c":
+            val_up = valor.strip().upper()
+            if len(val_up) >= 2 and val_up[0] in ("V", "E") and val_up[1:].isdigit():
+                rows = buscar_por_documento(val_up)
+            else:
+                rows = buscar_por_cedula(valor)
+            trunc = False
+        else:
+            rows, trunc = buscar_por_nombre(valor)
+    except FileNotFoundError as e:
+        await msg.reply_text(str(e))
+        return
+    except Exception as e:
+        logger.exception("CICPC: error en consulta: %s", e)
+        await msg.reply_text("❌ Error al consultar CICPC.")
+        return
+
+    if not rows:
+        await msg.reply_text("Sin resultados en CICPC.")
+        return
+
+    bloques: list[str] = ["📋 CICPC"]
     max_filas = 6 if mode == "n" else 3
     for i, r in enumerate(rows[:max_filas], 1):
         bloques.append(f"\n── #{i} ──\n{compactar_fila(r)}")
@@ -1227,6 +1354,7 @@ def main() -> None:
     app.add_handler(CommandHandler("help", help_command, filters=uf))
     app.add_handler(CommandHandler("digitel", digitel_command, filters=uf))
     app.add_handler(CommandHandler("gnb", gnb_command, filters=uf))
+    app.add_handler(CommandHandler("cicpc", cicpc_command, filters=uf))
     app.add_handler(CommandHandler("seniat", seniat_command, filters=uf))
     app.add_handler(conv_handler)
     app.add_handler(CallbackQueryHandler(nueva_consulta_callback, pattern="^NUEVA_CONSULTA$"))
