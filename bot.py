@@ -559,7 +559,7 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
 
     personalidad_map = {"V": "1", "E": "2", "J": "3", "P": "4", "G": "5"}
     personalidad = personalidad_map.get((nacionalidad or "V").upper(), "1")
-    max_reintentos = 3
+    max_reintentos = 5
     ultimo_error: str | None = None
 
     for intento in range(1, max_reintentos + 1):
@@ -569,18 +569,40 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
             inicio = session.get(SENIAT_URL, headers=headers, timeout=30)
             inicio.raise_for_status()
             inicio.encoding = "windows-1252"
+            soup_inicio = BeautifulSoup(inicio.text, "html.parser")
+
+            # SENIAT suele devolver action con jsessionid; usarla mejora estabilidad.
+            form = soup_inicio.find("form", attrs={"name": "rifRelacionConsultaForm"})
+            action = form.get("action") if form else "/relacionesrif/inicioConsulta.do"
+            if not action.startswith("http"):
+                action = f"http://contribuyente.seniat.gob.ve{action}"
+            action_fallback = "http://contribuyente.seniat.gob.ve/relacionesrif/inicioConsulta.do"
 
             payload = {
                 "contexto": "/relacionesrif",
                 "personalidad": personalidad,
                 "ci": cedula,
             }
-            resp = session.post(
-                "http://contribuyente.seniat.gob.ve/relacionesrif/inicioConsulta.do",
-                data=payload,
-                headers={"User-Agent": "Mozilla/5.0", "Referer": SENIAT_URL},
-                timeout=35,
-            )
+            post_headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Referer": SENIAT_URL,
+                "Connection": "close",
+            }
+            try:
+                resp = session.post(
+                    action,
+                    data=payload,
+                    headers=post_headers,
+                    timeout=(20, 45),
+                )
+            except requests.exceptions.Timeout:
+                # Fallback en el mismo intento por si el action con jsessionid quedó colgado.
+                resp = session.post(
+                    action_fallback,
+                    data=payload,
+                    headers=post_headers,
+                    timeout=(20, 45),
+                )
             resp.raise_for_status()
             resp.encoding = "windows-1252"
 
@@ -619,21 +641,35 @@ def consultar_seniat(cedula: str, nacionalidad: str = "V") -> dict:
             }
         except requests.exceptions.Timeout:
             ultimo_error = "timeout"
+            logger.warning(
+                "SENIAT timeout intento %s/%s para %s-%s",
+                intento,
+                max_reintentos,
+                nacionalidad,
+                cedula,
+            )
             if intento < max_reintentos:
-                time.sleep(intento)
+                time.sleep(min(6, 2 ** (intento - 1)))
                 continue
         except requests.exceptions.ConnectionError:
             ultimo_error = "conexion"
+            logger.warning(
+                "SENIAT conexión fallida intento %s/%s para %s-%s",
+                intento,
+                max_reintentos,
+                nacionalidad,
+                cedula,
+            )
             if intento < max_reintentos:
-                time.sleep(intento)
+                time.sleep(min(6, 2 ** (intento - 1)))
                 continue
         except Exception as e:
             return {"error": True, "error_str": f"Error inesperado en SENIAT: {str(e)}"}
 
     if ultimo_error == "timeout":
-        return {"error": True, "error_str": "SENIAT tardó demasiado en responder (se reintentó 3 veces)."}
+        return {"error": True, "error_str": "SENIAT tardó demasiado en responder (se reintentó 5 veces)."}
     if ultimo_error == "conexion":
-        return {"error": True, "error_str": "No se pudo conectar al servidor de SENIAT (se reintentó 3 veces)."}
+        return {"error": True, "error_str": "No se pudo conectar al servidor de SENIAT (se reintentó 5 veces)."}
     return {"error": True, "error_str": "No fue posible completar la consulta SENIAT."}
 
 
